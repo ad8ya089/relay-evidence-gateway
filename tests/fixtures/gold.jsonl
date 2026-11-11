@@ -1,0 +1,2 @@
+{"qid":"FAKE-q1","gold_claims":["FAKE alpha fixture claim"],"gold_phrases":["FAKE alpha evidence"],"paper":"transformer","version":7,"section":"FAKE section","page":1,"must_refuse":false,"notes":"FAKE synthetic data; not paper facts"}
+{"qid":"FAKE-q2","gold_claims":["FAKE beta fixture claim"],"gold_phrases":["FAKE beta evidence"],"paper":"moshi","version":1,"section":"FAKE section","page":1,"must_refuse":false,"notes":"FAKE synthetic data; not paper facts"}

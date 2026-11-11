@@ -1,0 +1,37 @@
+tokenizer: o200k_base
+dense_model: BAAI/bge-small-en-v1.5
+rerank_model: Xenova/ms-marco-MiniLM-L-6-v2
+model_threads: 2  # assumed CPU limit; avoid ONNX oversubscription
+model_batch_size: 32  # assumed memory bound, not calibrated
+paper_hint_boost: 1.3
+rrf_k: 60  # assumed engineering choice; not calibrated
+dense_min_score: 0.0  # assumed neutral cosine floor, not calibrated
+timeout_ms: 120000  # assumed; includes first model load
+download_timeout_s: 90
+heading_font_ratio: 1.12  # assumed extraction heuristic
+column_slack_ratio: 0.03  # assumed extraction heuristic
+min_column_blocks: 2  # assumed: reject indented single-column prose
+max_heading_chars: 120  # assumed extraction heuristic
+short_block_tokens: 96  # assumed: duplicate short table/caption into surrounding text
+chunk_tolerance: 0.15
+settings:
+  A: {target_tokens: 256, overlap: 40, top_k: 6, candidates: 6, method: bm25, rerank: false}
+  B: {target_tokens: 512, overlap: 64, top_k: 4, candidates: 4, method: bm25, rerank: false}
+  C: {target_tokens: 384, overlap: 48, top_k: 4, candidates: 12, method: hybrid, rerank: true}
+  D: {target_tokens: 384, overlap: 48, top_k: 4, candidates: 12, method: hybrid, rerank: false}
+papers:
+  - paper_id: transformer
+    title: Attention Is All You Need
+    arxiv_id: '1706.03762'
+    arxiv_version: 7
+    url: https://arxiv.org/pdf/1706.03762v7
+  - paper_id: moshi
+    title: 'Moshi: a speech-text foundation model for real-time dialogue'
+    arxiv_id: '2410.00037'
+    arxiv_version: 1
+    url: https://arxiv.org/pdf/2410.00037v1
+  - paper_id: dynamic_chunking
+    title: Dynamic Chunking for End-to-End Hierarchical Sequence Modeling
+    arxiv_id: '2507.07955'
+    arxiv_version: 2
+    url: https://arxiv.org/pdf/2507.07955v2

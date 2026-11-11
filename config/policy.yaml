@@ -1,0 +1,3 @@
+# P1 safety defaults; admission/retry policies belong to P5.
+provider: standin
+status: assumed
