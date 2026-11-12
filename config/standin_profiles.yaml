@@ -1,3 +1,63 @@
-# P3 will implement profiles; no calibrated measurements exist yet.
-status: not measured
-profiles: {}
+# Every number is chosen/assumed simulation configuration, not a Groq measurement.
+profiles:
+  development: &development
+    description: Synthetic local development only; never exact-account results.
+    model: openai/gpt-oss-20b
+    models:
+      openai/gpt-oss-20b:
+        rpm: {value: 600, source: chosen, note: Synthetic development quota}
+        tpm: {value: 1000000, source: chosen, note: Synthetic development quota}
+        rpd: {value: 100000, source: chosen, note: Synthetic development quota}
+        tpd: {value: 10000000, source: chosen, note: Synthetic development quota}
+    seed: {value: 20261112, source: chosen, note: Reproducible scenario seed}
+    capacity: {value: 4, source: assumed, note: No real concurrency measurement}
+    alpha: {value: 0.5, source: assumed, note: Design fallback without burst data}
+    chunks: {value: 4, source: chosen, note: Content chunks per successful stream}
+    reasoning_fraction: {value: 0.1, source: assumed, note: Included in simulated completion tokens}
+    window_s: {value: 60, source: chosen, note: Exact rolling monotonic window simulation}
+    disconnect_poll_s: {value: 0.05, source: chosen, note: Bounded ASGI disconnect polling}
+    diagnostic_history: {value: 100, source: chosen, note: Bounded safe decision history}
+    daily_reset: UTC midnight
+    reset_format: simulated decimal seconds with s suffix
+    scale: {value: 1, source: chosen, note: Unscaled synthetic development limits}
+    timing:
+      draft: &draft
+        ttft_ms: {family: lognormal, parameters: {value: [5.7, 0.3], source: assumed, note: Lognormal mu and sigma; not measured}}
+        decode_tps: {family: lognormal, parameters: {value: [5.3, 0.15], source: assumed, note: Lognormal mu and sigma; not measured}}
+        completion_tokens: {family: empirical, parameters: {value: [220, 260, 300], source: assumed, note: Simulated output including reasoning}}
+      verify:
+        ttft_ms: {family: lognormal, parameters: {value: [5.3, 0.25], source: assumed, note: Lognormal mu and sigma; not measured}}
+        decode_tps: {family: lognormal, parameters: {value: [5.5, 0.15], source: assumed, note: Lognormal mu and sigma; not measured}}
+        completion_tokens: {family: empirical, parameters: {value: [60, 80, 100], source: assumed, note: Simulated verifier output}}
+      generic: *draft
+    faults:
+      server_error_prob: {value: 0.025, source: chosen, note: Design simulation range 2-3 percent}
+      timeout_prob: {value: 0.0, source: chosen, note: Disabled until explicitly requested}
+      disconnect_prob: {value: 0.0, source: chosen, note: Disabled until explicitly requested}
+      slow_success_prob: {value: 0.1, source: chosen, note: Design simulation range 5-15 percent}
+      verify_fail_prob: {value: 0.05, source: chosen, note: Exercise P4 repair path}
+      slow_factor: {value: 8.0, source: chosen, note: Design retry experiment factor}
+      server_status: {value: 503, source: chosen, note: Configurable simulator server error}
+      timeout_s: {value: 30.0, source: chosen, note: Withhold beyond P2 default read timeout}
+      disconnect_fraction: {value: 0.5, source: chosen, note: Truncate before finish and DONE}
+    cache:
+      enabled: {value: true, source: chosen, note: Simulated exact static-message prefix cache}
+      ttl_s: {value: 7200.0, source: assumed, note: Two-hour simulation choice; not verified Groq behavior}
+      minimum_tokens: {value: 0, source: chosen, note: Development permits short static prefixes}
+      max_entries: {value: 10000, source: chosen, note: Bounded local cache}
+  free_exact:
+    <<: *development
+    description: Exact-account fidelity unavailable until actual Limits-page values supplied.
+    models: &unknown
+      openai/gpt-oss-20b:
+        rpm: {value: null, source: assumed, note: Unverified; supply actual Limits-page value and observation date}
+        tpm: {value: null, source: assumed, note: Unverified; supply actual Limits-page value and observation date}
+        rpd: {value: null, source: assumed, note: Unverified; supply actual Limits-page value and observation date}
+        tpd: {value: null, source: assumed, note: Unverified; supply actual Limits-page value and observation date}
+    capacity: {value: 4, source: assumed, note: No genuine burst probe exists}
+  scaled:
+    <<: *development
+    description: Derived from free_exact inputs; refuses unknown base quotas.
+    models: *unknown
+    capacity: {value: 8, source: chosen, note: Documented scaled experiment capacity}
+    scale: {value: 30, source: chosen, note: Multiply every base quota equally to preserve binding ratio}

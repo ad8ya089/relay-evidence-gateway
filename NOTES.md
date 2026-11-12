@@ -291,3 +291,32 @@ usage; state the schema/streaming split and explicit compatibility policy; and
 update the runbook to explain that `make probe` and `make probe-shapes` now
 default to dry runs. Existing P1 notes above are historical, including the guard's
 former non-refunding behavior; P2's durable reconciliation supersedes it.
+
+# P3 integration checklist and decisions
+
+The clean starting point is P2 `c4b67f08857d2d2391daee1dc7e748f4ac70ec10`
+on main, with the expected origin. All original documents remain immutable.
+
+- P2 appends `chat/completions` to a base URL ending in `/openai/v1/`.
+  Literal loopback is local, needs no key/real permission/reservation, and ledger
+  attempts are `real=false`. No second provider adapter is needed.
+- Non-stream responses expose `choices[0].message.content`, IDs/model and usage.
+  SSE carries `choices[].delta.content`, optional reasoning, top-level usage or
+  `x_groq.usage`, empty-choice usage snapshots and `[DONE]`.
+- Usage includes input/output/cached/total separately; reasoning is a subset of
+  output. The existing offline `get_encoding().encode()` counts simulated tokens.
+- Retry-After is numeric seconds; request headers mean RPD and token headers TPM.
+  Unknown simulator 429 codes remain unknown to the production classifier.
+- Calibration joins `call_start/first_delta/call_end` by call_id. Kind/model/source
+  are on start/end; first_delta carries `what` and `provider_elapsed_ms`, end
+  carries total_ms and usage.in/out/cached plus completion_time when available.
+- Clock and EventWriter are constructor injections. Service factories also inject
+  a dedicated RNG and async sleep primitive for deterministic tests.
+
+Current P3 instructions supersede the older demand to copy observed Groq 429
+shapes: none have been observed, so error codes/reset formatting are explicitly
+simulated. They also supersede the older scaled default: development is synthetic;
+free_exact/scaled refuse absent account values. Provider/header policy is unchanged.
+UTC wall-clock is required for UTC quota boundaries and wire `created` provenance;
+all service delays/windows/durations use the monotonic clock. Internal stand-in
+streaming is provider simulation, not P4's user-visible answer release.
