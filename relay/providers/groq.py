@@ -20,11 +20,13 @@ from relay.providers.base import (
     ProviderError,
     ProviderFailure,
     ResponseFormat,
+    StreamDelta,
     Usage,
 )
 from relay.providers.errors import classify_error, header_snapshot
 from relay.providers.parsing import ResponseState, parse_usage, validate_output
 from relay.providers.settings import ProviderSettings, provider_settings
+from relay.providers.streaming import DeltaCallbackError, StreamDisconnectedError, consume_stream
 
 
 def is_loopback_url(base_url: str) -> bool:
@@ -146,9 +148,64 @@ class GroqCompatibleProvider:
                     request = request.model_copy(
                         update={"response_format": ResponseFormat(type="json_object")}
                     )
-        if request.stream:
-            raise ProviderError(ProviderFailure(kind="unsupported_combination"))
         return request
+
+    async def _stream(
+        self,
+        response: httpx.Response,
+        request: LLMRequest,
+        snapshot: HeaderSnapshot,
+        start: int,
+        diagnostics: ProviderDiagnostics,
+        state: ResponseState,
+        context: EventContext,
+        on_delta: DeltaCallback | None,
+    ) -> LLMResult:
+        seen: set[str] = set()
+
+        async def deliver(delta: StreamDelta) -> None:
+            if delta.what not in seen:
+                seen.add(delta.what)
+                self._emit(
+                    context,
+                    "first_delta",
+                    call_id=request.metadata.call_id,
+                    what=delta.what,
+                    provider_elapsed_ms=delta.t_ms,
+                )
+            if on_delta is not None:
+                try:
+                    await on_delta(delta)
+                except Exception:
+                    raise DeltaCallbackError("Application delta callback failed") from None
+
+        await consume_stream(
+            response,
+            request,
+            state,
+            diagnostics,
+            clock=self.clock,
+            start_ns=start,
+            sanitizer=self.sanitizer,
+            on_delta=deliver,
+        )
+        return LLMResult(
+            text=state.text,
+            model=request.model or self.model,
+            response_model=state.response_model,
+            completion_id=state.completion_id,
+            provider_request_id=state.provider_request_id,
+            status_code=response.status_code,
+            usage=state.usage,
+            usage_complete=state.usage.complete,
+            header_snapshot=snapshot,
+            provider_ttft_ms=state.first_content_ms,
+            first_content_delta_ms=state.first_content_ms,
+            first_reasoning_delta_ms=state.first_reasoning_ms,
+            total_ms=(self.clock.monotonic_ns() - start) / 1_000_000,
+            structured_output=validate_output(state.text, request),
+            diagnostics=diagnostics,
+        )
 
     def _nonstream(
         self,
@@ -239,13 +296,8 @@ class GroqCompatibleProvider:
                 snapshot = header_snapshot(
                     response.headers, clock=self.clock, sanitizer=self.sanitizer
                 )
-                raw = await response.aread()
-                raw_body = self.sanitizer.text(raw.decode("utf-8", "replace"), body=True)
-                if request.capture_response or not 200 <= status < 300:
-                    diagnostics.body_trunc = self.sanitizer.text(
-                        raw.decode("utf-8", "replace"), body=True
-                    )
                 if not 200 <= status < 300:
+                    raw = await response.aread()
                     raise ProviderError(
                         classify_error(
                             status,
@@ -255,7 +307,16 @@ class GroqCompatibleProvider:
                             sanitizer=self.sanitizer,
                         )
                     )
-                result = self._nonstream(raw, request, snapshot, start, diagnostics, state)
+                if request.stream:
+                    result = await self._stream(
+                        response, request, snapshot, start, diagnostics, state, context, on_delta
+                    )
+                else:
+                    raw = await response.aread()
+                    raw_body = self.sanitizer.text(raw.decode("utf-8", "replace"), body=True)
+                    if request.capture_response:
+                        diagnostics.body_trunc = raw_body
+                    result = self._nonstream(raw, request, snapshot, start, diagnostics, state)
                 result.status_code = status
             result.total_ms = (self.clock.monotonic_ns() - start) / 1_000_000
             self._emit(
@@ -278,8 +339,10 @@ class GroqCompatibleProvider:
                 error = exc
             elif isinstance(exc, (httpx.TimeoutException, TimeoutError)):
                 error = self._error("timeout", start, snapshot, reason=type(exc).__name__)
-            elif isinstance(exc, httpx.TransportError):
+            elif isinstance(exc, (httpx.TransportError, StreamDisconnectedError)):
                 error = self._error("disconnect", start, snapshot, reason=type(exc).__name__)
+            elif isinstance(exc, DeltaCallbackError):
+                error = self._error("callback", start, snapshot, reason=type(exc).__name__)
             elif isinstance(exc, EventWriteError):
                 error = self._error("persistence", start, snapshot, reason=type(exc).__name__)
             else:
@@ -288,7 +351,7 @@ class GroqCompatibleProvider:
                 error.info.status_code = status
             error.info.usage = state.usage
             if not error.info.body_trunc:
-                error.info.body_trunc = raw_body
+                error.info.body_trunc = diagnostics.body_trunc or raw_body
             error.info.total_ms = (self.clock.monotonic_ns() - start) / 1_000_000
             if error.kind != "persistence":
                 self._emit(

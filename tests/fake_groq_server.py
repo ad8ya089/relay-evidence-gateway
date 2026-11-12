@@ -80,10 +80,28 @@ class FakeGroqServer:
             )
             self.entered.set()
             if mode == "hang":
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n")
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+                    b"Transfer-Encoding: chunked\r\n\r\n"
+                )
                 await writer.drain()
                 await reader.read()
                 self.disconnected.set()
+                return
+            if payload.get("stream") and mode in {
+                "success",
+                "stream",
+                "usage-final",
+                "usage-only",
+                "x-groq-usage",
+                "no-usage",
+                "malformed-stream",
+                "disconnect",
+                "incomplete",
+                "empty-stream",
+                "usage-before-disconnect",
+            }:
+                await self._stream(writer, mode)
                 return
             status = {
                 "minute": 429,
@@ -123,6 +141,49 @@ class FakeGroqServer:
             except ConnectionError:
                 pass
             self._tasks.discard(task)
+
+    async def _stream(self, writer: asyncio.StreamWriter, mode: str) -> None:
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            b"Transfer-Encoding: chunked\r\nConnection: close\r\n"
+            b"X-RateLimit-Remaining-Tokens: 7000\r\n\r\n"
+        )
+        await writer.drain()
+
+        async def frame(value: object, *, raw: bool = False) -> None:
+            data = str(value) if raw else json.dumps(value)
+            content = ("data: " + data + "\n\n").encode()
+            writer.write(f"{len(content):x}\r\n".encode() + content + b"\r\n")
+            await writer.drain()
+
+        if mode != "empty-stream":
+            await frame({"choices": [{"delta": {"reasoning": "FAKE reasoning"}}]})
+            await frame({"choices": [{"delta": {"content": '{"answer":'}}]})
+            if mode == "disconnect":
+                writer.transport.abort()
+                return
+            if mode == "malformed-stream":
+                await frame("{not JSON", raw=True)
+            final = {
+                "choices": [{"delta": {"content": '"FAKE evidence"}'}, "finish_reason": "stop"}]
+            }
+            if mode == "usage-final":
+                final["usage"] = completion()["usage"]
+            await frame(final)
+            if mode not in {"no-usage", "usage-final"}:
+                usage = completion()["usage"]
+                await frame(
+                    {"choices": [], "x_groq": {"usage": usage}}
+                    if mode == "x-groq-usage"
+                    else {"choices": [], "usage": usage}
+                )
+            if mode == "usage-before-disconnect":
+                writer.transport.abort()
+                return
+        if mode != "incomplete":
+            await frame("[DONE]", raw=True)
+        writer.write(b"0\r\n\r\n")
+        await writer.drain()
 
 
 @pytest.fixture
