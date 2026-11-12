@@ -11,6 +11,7 @@ from starlette.responses import Response
 
 from relay.obs.clock import Clock, SystemClock
 from relay.providers.base import LLMRequest
+from standin.admin import admin_router
 from standin.generation import InvalidInput
 from standin.profile import Profile, load_profile
 from standin.quota import retry_header
@@ -117,6 +118,7 @@ def create_app(
     simulation = Simulation(selected, clock if clock is not None else SystemClock(), rng)
     application = FastAPI(title="Relay local stand-in")
     application.state.simulation = simulation
+    application.include_router(admin_router(simulation))
 
     @application.post("/openai/v1/chat/completions")
     async def completions(payload: LLMRequest, request: Request) -> Response:
