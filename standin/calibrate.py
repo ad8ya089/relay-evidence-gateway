@@ -77,6 +77,8 @@ class CalibrationReport(BaseModel):
     generated_at: str
     model: str
     seed: int
+    capacity: Parameter[int]
+    configuration: CalibrationSettings
     source_events: list[str]
     run_ids: list[str]
     n_calls: dict[str, int]
@@ -164,6 +166,7 @@ def extract(
             if e.get("ev") == "first_delta"
             and e.get("what") == "content"
             and e.get("rid") == start.get("rid")
+            and e.get("source", "real") == "real"
         ]
         times = [number(e.get("provider_elapsed_ms")) for e in deltas]
         ttft = min((t for t in times if t is not None and t <= total), default=None)
@@ -205,7 +208,13 @@ def fit_kind(samples: list[Sample], config: CalibrationSettings, rng: random.Ran
     small = len(pairs) < config.bootstrap_threshold.value
     fit = KindFit(
         n_calls=len(samples),
-        method="paired_bootstrap_lognormal_tail" if small and pairs else "lognormal_percentiles",
+        method=(
+            "unavailable"
+            if not ttfts and not rates
+            else "paired_bootstrap_lognormal_tail"
+            if small and pairs
+            else "lognormal_percentiles"
+        ),
         ttft_ms=fit_metric(ttfts),
         decode_tps=fit_metric(rates),
         pairs=pairs,
@@ -233,10 +242,12 @@ def fit_kind(samples: list[Sample], config: CalibrationSettings, rng: random.Ran
             fit.warnings.append("Simulated p99 differs from observed by more than 25%")
     if len(observed) < config.p99_min_samples.value:
         fit.warnings.append(f"n={len(observed)}: p99 is unreliable below 100 observations")
-    if small:
+    if small and pairs:
         fit.warnings.append(
             "Small sample; bootstrap pairs retained, tail mass is chosen, not measured"
         )
+    elif small:
+        fit.warnings.append("No complete observed pairs; paired sampling is unavailable")
     return fit
 
 
@@ -309,6 +320,8 @@ def calibrate(
         generated_at=(clock or SystemClock()).utc_now().isoformat(),
         model=profile.model,
         seed=config.seed.value,
+        capacity=profile.capacity,
+        configuration=config,
         source_events=source_events or [],
         run_ids=extraction.run_ids,
         n_calls={kind: k.n_calls for kind, k in kinds.items()},
@@ -326,7 +339,7 @@ def calibrate(
         ],
         limitations=[
             "Source labels cannot establish authenticity; review input event provenance",
-            "Synthetic/test events excluded; genuine account data not supplied in P3",
+            "Synthetic/test events excluded; source labels still require provenance review",
             "No batching, cross-tenant noise or real enforcement-window fidelity",
             "Tail probability and unmeasured fault defaults remain chosen/assumed",
         ],

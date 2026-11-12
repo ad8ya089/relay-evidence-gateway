@@ -25,7 +25,3 @@ def profile(**overrides: object) -> Profile:
             target = target[part]
         target[parts[-1]]["value"] = value
     return Profile.model_validate(data)
-
-
-async def advance_sleep(seconds: float) -> None:
-    raise AssertionError("Tests must inject a clock-bound sleep")

@@ -1,9 +1,11 @@
 """Local model-service simulation; same P2 adapter, no credentials or real calls."""
 
+import argparse
 import asyncio
 import math
 import random
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,7 +16,7 @@ from relay.providers.base import LLMRequest
 from standin.admin import admin_router
 from standin.calibrate import CalibrationReport
 from standin.generation import InvalidInput
-from standin.profile import Profile, load_profile
+from standin.profile import Profile, load_profile, server_settings
 from standin.quota import retry_header
 from standin.simulation import Prepared, QuotaRejected, Simulation
 from standin.streaming import stream_response
@@ -81,7 +83,7 @@ async def nonstream(
             return JSONResponse(
                 status_code=prepared.profile.faults.server_status.value,
                 content={"error": {"code": "simulated_server_error"}},
-                headers=prepared.admission.view.headers,
+                headers=simulation.response_headers(prepared.model),
             )
         if fault == "timeout":
             await delay(
@@ -94,14 +96,17 @@ async def nonstream(
             return JSONResponse(
                 status_code=504,
                 content={"error": {"code": "simulated_timeout"}},
-                headers=prepared.admission.view.headers,
+                headers=simulation.response_headers(prepared.model),
             )
         total_s = (
             prepared.decision.ttft_ms + prepared.decision.decode_ms(prepared.tokens_out)
         ) / 1000
         await delay(request, simulation, total_s, sleep, prepared.profile.disconnect_poll_s.value)
         success = True
-        return JSONResponse(content=envelope(prepared), headers=prepared.admission.view.headers)
+        simulation.finish(prepared, success=True)
+        return JSONResponse(
+            content=envelope(prepared), headers=simulation.response_headers(prepared.model)
+        )
     except ClientGone:
         return JSONResponse(status_code=499, content={"error": {"code": "simulated_client_gone"}})
     finally:
@@ -157,3 +162,54 @@ def create_app(
 
 
 app = create_app()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", default="development")
+    parser.add_argument(
+        "--check", action="store_true", help="Validate startup without binding a socket"
+    )
+    parser.add_argument("--port", type=int)
+    parser.add_argument(
+        "--calibration", type=Path, help="Explicit optional generated calibration overlay"
+    )
+    args = parser.parse_args()
+    try:
+        import uvicorn
+
+        profile = load_profile(args.profile)
+        calibration = (
+            CalibrationReport.model_validate_json(args.calibration.read_text())
+            if args.calibration
+            else None
+        )
+        application = create_app(profile=profile, calibration=calibration)
+        server = server_settings()
+        port = args.port if args.port is not None else server.port.value
+        if not 0 <= port <= 65535:
+            raise ValueError("Port must be within the valid TCP range")
+        if args.check:
+            print(
+                f"Stand-in startup valid: profile={profile.name}; "
+                f"seed={profile.seed.value}; source=stand-in"
+            )
+            return 0
+        uvicorn.run(
+            application,
+            host=server.host,
+            port=port,
+            workers=1,
+            proxy_headers=False,
+            timeout_graceful_shutdown=int(server.graceful_shutdown_s.value),
+        )
+        return 0
+    except (ValueError, OSError) as exc:
+        from relay.obs.events import Sanitizer
+
+        print("Stand-in refused: " + Sanitizer().text(str(exc), body=True))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

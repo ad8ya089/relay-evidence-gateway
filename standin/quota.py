@@ -47,7 +47,7 @@ class Quotas:
             if any(c.pending for charges in self._models.values() for c in charges):
                 raise ValueError("Cannot reset outstanding quota reservations")
             self._models.clear()
-            self._next_id = 0
+            # IDs remain unique so a delayed pre-reset finalizer cannot settle new work.
 
     def _active(self, model: str) -> list[Charge]:
         now, day = self.clock.monotonic_ns(), self.clock.utc_now().date().isoformat()
@@ -64,8 +64,8 @@ class Quotas:
         minute = [c for c in charges if now - c.started_ns < self.window_ns]
         daily = [c for c in charges if c.day == day]
         # A long-running reservation remains charged even after its start window/day expires.
-        tokens_min = [c for c in charges if c.pending or c in minute]
-        tokens_day = [c for c in charges if c.pending or c in daily]
+        tokens_min = [c for c in charges if c.pending or now - c.started_ns < self.window_ns]
+        tokens_day = [c for c in charges if c.pending or c.day == day]
         usage = {
             "rpm": len(minute),
             "tpm": sum(c.tokens for c in tokens_min),
@@ -109,9 +109,7 @@ class Quotas:
             if required > view.limits[scope]:
                 return None  # This request cannot fit after any ordinary reset.
             if scope in {"rpd", "tpd"}:
-                if scope == "tpd" and any(
-                    c.pending and c.day != utc.date().isoformat() for c in charges
-                ):
+                if scope == "tpd" and any(c.pending for c in charges):
                     return None
                 waits.append(
                     (

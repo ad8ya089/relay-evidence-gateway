@@ -86,7 +86,11 @@ class Simulation:
                 raise InvalidInput("Model is not configured in this stand-in profile")
             kind = call_kind(request.messages)
             decision = self.sampler.decide(
-                profile, kind, self.inflight + 1, request.max_completion_tokens
+                profile,
+                kind,
+                self.inflight + 1,
+                request.max_completion_tokens,
+                use_calibration=model == profile.model,
             )
             text = generate(request.messages, verify_fail=decision.verify_fail)
             visible_tokens = len(get_encoding().encode(text))
@@ -156,6 +160,7 @@ class Simulation:
                 "model": self.profile.model,
                 "seed": self.profile.seed.value,
                 "calibration_kinds": list(self.sampler.calibration),
+                "calibration_model": self.profile.model if self.sampler.calibration else None,
                 "inflight": self.inflight,
                 "capacity": self.profile.capacity.value,
                 "models": {
@@ -168,3 +173,7 @@ class Simulation:
                 "last_admin_update": self.last_admin_update,
                 "decisions": [d.model_dump() for d in self.decisions],
             }
+
+    def response_headers(self, model: str) -> dict[str, str]:
+        with self.lock:
+            return self.quotas.view(model, self.profile.models[model]).headers

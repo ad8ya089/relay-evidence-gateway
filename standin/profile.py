@@ -118,6 +118,7 @@ class Profile(BaseModel):
     name: str
     description: str
     model: str
+    model_provenance: Parameter[str]
     models: dict[str, Limits] = Field(min_length=1)
     seed: Parameter[int]
     capacity: Parameter[int]
@@ -136,6 +137,8 @@ class Profile(BaseModel):
 
     @model_validator(mode="after")
     def valid_profile(self) -> "Profile":
+        if self.model_provenance.value != self.model:
+            raise ValueError("Model identity must match its provenance")
         if self.model not in self.models or set(self.timing) != {"draft", "verify", "generic"}:
             raise ValueError("Default model and all call-kind timing profiles required")
         if (
@@ -159,7 +162,33 @@ class Profile(BaseModel):
     def runnable(self) -> "Profile":
         for limits in self.models.values():
             limits.numbers()
+            if self.name == "free_exact" and any(
+                getattr(limits, name).source != "observed" for name in type(limits).model_fields
+            ):
+                raise ValueError("Exact-account limits require observed provenance and date")
         return self
+
+
+class ServerSettings(BaseModel):
+    host: Literal["127.0.0.1"]
+    port: Parameter[int]
+    graceful_shutdown_s: Parameter[float]
+
+    @model_validator(mode="after")
+    def valid_server(self) -> "ServerSettings":
+        if (
+            not 0 <= self.port.value <= 65535
+            or not math.isfinite(self.graceful_shutdown_s.value)
+            or self.graceful_shutdown_s.value <= 0
+        ):
+            raise ValueError("Invalid local server configuration")
+        return self
+
+
+@lru_cache(maxsize=1)
+def server_settings() -> ServerSettings:
+    raw = yaml.safe_load(Path("config/standin_profiles.yaml").read_text(encoding="utf-8"))
+    return ServerSettings.model_validate(raw["server"])
 
 
 @lru_cache(maxsize=1)
@@ -190,5 +219,11 @@ def load_profile(name: str = "development") -> Profile:
                     for field, value in limits.numbers().items()
                 }
             )
-        profile = profile.model_copy(update={"models": models, "model": base.model})
+        profile = profile.model_copy(
+            update={
+                "models": models,
+                "model": base.model,
+                "model_provenance": base.model_provenance,
+            }
+        )
     return profile.runnable()

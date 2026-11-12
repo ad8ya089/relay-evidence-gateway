@@ -1,0 +1,35 @@
+P3 files relative to C:\dev\relay-evidence-gateway
+Baseline: c4b67f08857d2d2391daee1dc7e748f4ac70ec10
+A = created; M = changed
+
+A	config/calibration.yaml
+A	P3_FILES.txt
+A	standin/admin.py
+A	standin/cache.py
+A	standin/distributions.py
+A	standin/generation.py
+A	standin/quota.py
+A	standin/simulation.py
+A	standin/streaming.py
+A	tests/standin_helpers.py
+A	tests/standin_server.py
+A	tests/test_standin_admin.py
+A	tests/test_standin_cache.py
+A	tests/test_standin_calibration.py
+A	tests/test_standin_commands.py
+A	tests/test_standin_faults.py
+A	tests/test_standin_generation.py
+A	tests/test_standin_integration.py
+A	tests/test_standin_profiles.py
+A	tests/test_standin_quota.py
+A	tests/test_standin_service.py
+A	tests/test_standin_streaming.py
+A	tests/test_standin_wire.py
+M	.gitignore
+M	config/standin_profiles.yaml
+M	Makefile
+M	NOTES.md
+M	standin/calibrate.py
+M	standin/faults.py
+M	standin/profile.py
+M	standin/service.py

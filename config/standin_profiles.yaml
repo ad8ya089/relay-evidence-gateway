@@ -1,8 +1,13 @@
 # Every number is chosen/assumed simulation configuration, not a Groq measurement.
+server:
+  host: 127.0.0.1
+  port: {value: 8081, source: chosen, note: Required local stand-in service port}
+  graceful_shutdown_s: {value: 2.0, source: chosen, note: Bounded local shutdown}
 profiles:
   development: &development
     description: Synthetic local development only; never exact-account results.
     model: openai/gpt-oss-20b
+    model_provenance: {value: openai/gpt-oss-20b, source: chosen, note: P2 configured identifier; no account capability claim}
     models:
       openai/gpt-oss-20b:
         rpm: {value: 600, source: chosen, note: Synthetic development quota}

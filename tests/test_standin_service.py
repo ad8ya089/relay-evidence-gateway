@@ -84,3 +84,13 @@ async def test_server_fault_is_configured_and_releases_inflight(status: int) -> 
             await provider.complete(request())
     assert caught.value.status == status and caught.value.kind == "server"
     assert app.state.simulation.inflight == 0
+
+
+async def test_too_small_completion_cap_rejects_instead_of_truncating_json() -> None:
+    app = create_app(profile=profile())
+    async with GroqCompatibleProvider(
+        "http://127.0.0.1/openai/v1", None, profile().model, transport=httpx.ASGITransport(app=app)
+    ) as provider:
+        with pytest.raises(ProviderError) as caught:
+            await provider.complete(request().model_copy(update={"max_completion_tokens": 1}))
+    assert caught.value.status == 400 and app.state.simulation.inflight == 0

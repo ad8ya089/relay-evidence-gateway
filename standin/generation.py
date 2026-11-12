@@ -86,6 +86,7 @@ def verify_response(text: str, fail: bool) -> Verification:
         ) from None
     if (
         not claims
+        or any(not c.claim.strip() for c in claims)
         or len({c.i for c in claims}) != len(claims)
         or any(not q.strip() for c in claims for q in c.quotes)
     ):

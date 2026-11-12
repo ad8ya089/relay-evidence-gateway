@@ -320,3 +320,162 @@ free_exact/scaled refuse absent account values. Provider/header policy is unchan
 UTC wall-clock is required for UTC quota boundaries and wire `created` provenance;
 all service delays/windows/durations use the monotonic clock. Internal stand-in
 streaming is provider simulation, not P4's user-visible answer release.
+
+## P3 component responsibilities and assumptions
+
+`profile.py` loads cached Pydantic settings with numeric/distribution provenance.
+`faults.py` owns a dedicated locked RNG, resettable state and public bounded
+decision diagnostics. `generation.py` owns marker detection, chunk parsing and
+the draft/verifier JSON contracts. `cache.py` owns the bounded hashed static
+prefix cache. `quota.py` owns atomic per-model accounting. `simulation.py` joins
+these components into a completion lifetime. `service.py`, `streaming.py` and
+`admin.py` own HTTP, SSE and loopback-only administration. No P2 source or
+contract changed, and no P4/P5 orchestration/admission implementation was added.
+
+The production `app` and `create_app` factory are available. Factories accept a
+profile, clock, RNG and async sleep primitive. The CLI runs one Uvicorn worker,
+binds to 127.0.0.1 and disables forwarded-header trust. Admin snapshots contain
+configuration, counters and sampled decisions, not messages or request headers.
+Profile replacement/reset require quiescence (409 while requests are active);
+limit updates can occur during service. A finishing non-stream response reports
+the latest active limits after usage settlement, including a limit changed while
+that request was running. Stream headers describe the reservation-time snapshot.
+Call IDs remain unique across resets: a regression test first demonstrated that
+reusing IDs let a late old finalizer settle a new reservation. RNG decisions and
+quota/cache/statistics reset reproducibly; identity reuse is intentionally avoided.
+
+Development limits and distributions are synthetic, with chosen/assumed sources.
+The model name is a configured identifier, not an account-availability claim.
+`free_exact` keeps RPM/TPM/RPD/TPD NULL and refuses missing values. Exact inputs
+must carry observed provenance and date before running. `scaled` requires that
+base and multiplies all four values by the chosen K=30, with chosen capacity 8;
+free_exact capacity 4 remains assumed. No online generic quota was substituted.
+
+Minute quotas use rolling 60-second monotonic windows; daily quotas use UTC
+midnight. Token admission includes uncached estimated input plus the requested
+completion maximum and every outstanding reservation. Known simulated completion
+usage reconciles the reservation; failed/cancelled calls retain a conservative
+charge. Requests rejected before admission consume no simulated quota. Outstanding
+token reservations survive their original window/day until settlement. A 429
+lists all exceeded scopes and uses the longest known recovery time. If pending
+work or an oversized request makes recovery unknown, Retry-After is omitted.
+Request headers mean RPD and token headers TPM; RPM/TPD appear in admin state.
+Reset strings are simulated decimal seconds plus `s`, not observed Groq syntax;
+nominal window expiry alone does not release a still-pending reservation.
+
+Timing samples and fault draws are reproducible for the same seed and operation
+start order. Network arrival ordering under concurrent load is outside that
+guarantee; decision sequence numbers expose the actual order. Both TTFT and
+decode duration use the exact load multiplier. Decode duration is completion
+tokens divided by sampled tokens/sec. Slow successes multiply both components.
+Independent fault draws have explicit server/timeout/disconnect precedence;
+slow-success applies to calls without a hard fault. Server faults return the
+configured 500/503. Timeouts withhold a response for the configured interval,
+monitor disconnects, and eventually return simulated 504 if the caller waits.
+Truncated SSE omits finish/usage/DONE and is detected by P2 as a disconnect; it
+models incomplete protocol delivery, not a particular TCP-reset mechanism.
+There are no detached sleeping tasks or automatic retries.
+
+Streams delay first content by sampled TTFT, concatenate to the same complete
+JSON as non-streaming, emit configured nonempty content pieces (bounded by the
+text length), finish reason, optional usage-only final chunk, then `[DONE]`.
+Cleanup is idempotent across generator/background finalizers and cancellation.
+Usage input is estimated with P1's offline tokenizer and explicit message framing.
+Output counters sample a synthetic volume, bounded by the requested maximum and
+at least the JSON's visible token length. They can exceed literal JSON tokens;
+they are simulated counters, not provider measurements. Reasoning is a subset
+of output, cached tokens a subset of input, and totals are input plus output.
+A completion cap too small for complete JSON returns 400 instead of partial JSON.
+
+Drafts use the top usable multiline `<<chunk:ID>>...<<end>>` block and an exact
+sentence span capped at 40 words; empty evidence explicitly refuses. IDs and
+citations are never invented. Verifier input is exactly the architecture's JSON
+list of `{i, claim, quotes}` objects; blank/malformed inputs fail explicitly.
+Ordinary supplied claims receive simulator-supported verdicts; verify_fail_prob
+marks one eligible claim unsupported. This exercises P4 control flow and does
+not constitute semantic verification of scientific claims.
+
+The cache hashes model plus exact initial system/developer messages. Dynamic
+user questions/chunks are outside that prefix. TTL defaults to the assumed
+7,200 seconds and is refreshed after completed generation; size/threshold are
+configured. First use, different models, changed prefixes and expired entries
+miss. Failed generation does not populate the cache; reset clears it. P4 must
+keep dynamic material in user messages as specified by the architecture.
+
+## P3 calibration engine
+
+`make calibrate` consumes the P2 JSONL envelope. Start/end identity and source
+must match, calls join by run/call_id, models are isolated, and only real-labelled
+draft/verify attempts qualify. Stand-in events, synthetic/test flags/identifiers,
+fixture paths, duplicate/incomplete calls and failed metric observations are
+excluded. First-delta events normally inherit start source; an explicitly
+stand-in-labelled delta cannot contaminate a real-labelled call. Source labels
+are not proof of authenticity: actual event provenance still needs human review.
+The fixture-only in-memory extractor used by statistics tests has no CLI flag.
+
+TTFT uses first content provider_elapsed_ms, never reasoning or fabricated
+non-stream TTFT. Decode rate prefers reported completion_time, otherwise uses
+completion minus first content; invalid durations/incomplete usage are excluded.
+Below the configured 50-pair threshold, resampling preserves observed TTFT/rate/
+output-token tuples, with explicitly chosen 5% conditional lognormal tail mass.
+Larger samples fit lognormal parameters using p50/p95 and the specified 1.645
+formula. Completion-token samples remain empirical. Paired complete observations
+are compared with seeded simulations at p50/p95/p99, including ratios. Missing
+metrics say unavailable. p99 warns below 100 observations and for >25% mismatch.
+
+Alpha fitting requires explicitly declared genuine sequential and burst-six run
+IDs, comparable call kinds and capacity <6; otherwise alpha=0.5 assumed. The
+report preserves the capacity's provenance and full calibration configuration.
+Observed nonzero error frequencies need a meaningful sample; zero observed
+errors retain chosen simulation defaults instead of claiming zero true risk.
+The development defaults are 2.5% server errors and 10% slow successes, chosen.
+Timeout/disconnect/verification settings remain explicitly labelled.
+
+Generated `config/calibration.json` is ignored by Git. No real observations were
+available: the executed report is **uncalibrated**, with zero draft/verify samples.
+Synthetic known-parameter tests validate fitting mathematics only. An explicit
+`--calibration` overlay can apply fitted metrics without changing fallback YAML;
+model identity is checked and other models retain fallback timing. Profile swaps
+clear the overlay. No real-account limits or fitted data were committed.
+
+## P3 execution and review before P4
+
+Executed startup checks: development succeeded; free_exact and scaled exited 2
+with the four missing Limits-page inputs. The default 127.0.0.1:8081 launch found
+an existing listener and was not allowed to replace/terminate it. An independent
+CLI launch on ephemeral 127.0.0.1:57930 completed SSE with status 200 and complete
+usage using credential=None; that child was terminated after the smoke test.
+Real localhost integration tests also exercise live Uvicorn on ephemeral ports.
+
+Before P4, retain single-worker accounting, the exact verifier input layout and
+static-prefix placement. Buffer all internal deltas until validation. Real quotas,
+latency distributions, cached-token rules and failure shapes remain unverified.
+No P2 defect required a provider change. Proposed original-document edits remain
+unapplied: replace copied-real-429 assumptions with explicit simulation until
+observations exist, document the development default/refusing exact profiles,
+and describe quiescent profile/reset administration and reservation semantics.
+All original 11 project documents are preserved. No real Groq calls were sent,
+no credential was needed/read by the stand-in, and no real probe was executed.
+
+Final P3 verification:
+
+- Full pytest and `make test`: 212 tests passed, comprising the unchanged 142
+  P1/P2 tests (including P1's original 58) and 70 P3 acceptance/integration tests.
+- `ruff check .` passed; `ruff format --check .` reported 100 files formatted.
+  Mypy is not configured.
+- Provider compatibility includes non-stream and SSE draft/verify calls, final
+  usage, cached metadata, content TTFT, simulator 429 classification and no key.
+  Six concurrent HTTP operations with controlled sleeps exercise the exact load
+  multiplier; live HTTP tests verify timeout/cancellation/disconnect cleanup.
+- `make standin PROFILE=development STANDIN_ARGS=--check` succeeded. Exact/scaled
+  checks refused missing account limits as intended. `make calibrate` completed
+  uncalibrated with zero real samples and explicit unavailable/p99 warnings.
+- Source-document SHA-256 mismatches: zero of 11. Existing relay sources/tests
+  are unchanged. Staged inspections found no secrets or generated binary/data
+  artifacts. The complete 31-file inventory is `P3_FILES.txt`.
+
+Commands available: `make standin PROFILE=development` (default port 8081),
+`make standin PROFILE=development STANDIN_ARGS="--port PORT"` when that port is
+already occupied, and `make calibrate CALIBRATE_ARGS="--events PATH"`.
+Calibration application is explicit via stand-in `--calibration PATH`; it never
+silently rewrites chosen/assumed profile configuration.

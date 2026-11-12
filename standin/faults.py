@@ -55,7 +55,15 @@ class Sampler:
             self.rng.setstate(self._initial_state)
             self._sequence = 0
 
-    def decide(self, profile: Profile, kind: str, inflight: int, maximum: int) -> Decision:
+    def decide(
+        self,
+        profile: Profile,
+        kind: str,
+        inflight: int,
+        maximum: int,
+        *,
+        use_calibration: bool = True,
+    ) -> Decision:
         with self._lock:
             self._sequence += 1
             faults = profile.faults
@@ -74,7 +82,7 @@ class Sampler:
             )
             latency = multiplier * (faults.slow_factor.value if slow_success else 1)
             timing = profile.timing[kind]
-            fitted = self.calibration.get(kind)
+            fitted = self.calibration.get(kind) if use_calibration else None
             ttft, rate, tokens = (
                 draw_pair(fitted, self.rng) if fitted is not None else (None, None, None)
             )

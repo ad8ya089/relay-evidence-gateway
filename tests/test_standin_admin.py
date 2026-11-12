@@ -48,8 +48,10 @@ async def test_reset_reproduces_initial_sequence_but_rejects_active_requests() -
         sim.finish(first, success=True)
         assert (await client.post("/admin/reset")).status_code == 200
         again = sim.begin(request())
-        assert again.decision == first.decision and again.id == first.id
+        assert again.decision == first.decision and again.id != first.id
         assert not again.cache.hit
+        sim.finish(first, success=False)  # A delayed old stream finalizer must be harmless.
+        assert sim.inflight == 1
         sim.finish(again, success=True)
 
 

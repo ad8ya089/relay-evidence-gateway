@@ -54,7 +54,13 @@ def test_verifier_indices_and_predictable_failure() -> None:
 
 @pytest.mark.parametrize(
     "text",
-    ["garbage", "[]", '[{"i":0,"claim":"A","quotes":[]}]', '[{"i":0,"claim":"A","quotes":[""]}]'],
+    [
+        "garbage",
+        "[]",
+        '[{"i":0,"claim":"A","quotes":[]}]',
+        '[{"i":0,"claim":"A","quotes":[""]}]',
+        '[{"i":0,"claim":" ","quotes":["A"]}]',
+    ],
 )
 def test_malformed_verification_never_passes(text: str) -> None:
     with pytest.raises(InvalidInput):

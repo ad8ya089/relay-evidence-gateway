@@ -22,7 +22,7 @@ class MetricFit(BaseModel):
 class KindFit(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
     n_calls: int = Field(ge=0)
-    method: Literal["paired_bootstrap_lognormal_tail", "lognormal_percentiles"]
+    method: Literal["paired_bootstrap_lognormal_tail", "lognormal_percentiles", "unavailable"]
     ttft_ms: MetricFit | None
     decode_tps: MetricFit | None
     pairs: list[tuple[float, float, int]] = Field(default_factory=list)
