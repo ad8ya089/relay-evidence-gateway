@@ -1,0 +1,8 @@
+# Engineering defaults, assumed; no account-specific limits have been measured.
+connect_timeout_s: 2.0
+read_timeout_s: 5.0
+write_timeout_s: 5.0
+pool_timeout_s: 2.0
+allowed_real_hosts: [api.groq.com]
+# Populate only from captured evidence. Retry-After alone is not a scope classifier.
+error_rules: []
