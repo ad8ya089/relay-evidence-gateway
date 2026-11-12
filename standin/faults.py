@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from standin.distributions import KindFit, draw_pair
 from standin.profile import Distribution, Profile
 
 
@@ -37,11 +38,17 @@ def sample(distribution: Distribution, rng: random.Random) -> float:
 
 
 class Sampler:
-    def __init__(self, profile: Profile, rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        profile: Profile,
+        rng: random.Random | None = None,
+        calibration: dict[str, KindFit] | None = None,
+    ) -> None:
         self.rng = rng if rng is not None else random.Random(profile.seed.value)
         self._initial_state = self.rng.getstate()
         self._sequence = 0
         self._lock = threading.RLock()
+        self.calibration = calibration or {}
 
     def reset(self) -> None:
         with self._lock:
@@ -67,6 +74,10 @@ class Sampler:
             )
             latency = multiplier * (faults.slow_factor.value if slow_success else 1)
             timing = profile.timing[kind]
+            fitted = self.calibration.get(kind)
+            ttft, rate, tokens = (
+                draw_pair(fitted, self.rng) if fitted is not None else (None, None, None)
+            )
             return Decision(
                 sequence=self._sequence,
                 seed=profile.seed.value,
@@ -75,10 +86,18 @@ class Sampler:
                 fault=fault,
                 slow_success=slow_success,
                 verify_fail=verify < faults.verify_fail_prob.value,
-                ttft_ms=sample(timing.ttft_ms, self.rng) * latency,
-                decode_tps=sample(timing.decode_tps, self.rng),
+                ttft_ms=(ttft if ttft is not None else sample(timing.ttft_ms, self.rng)) * latency,
+                decode_tps=rate if rate is not None else sample(timing.decode_tps, self.rng),
                 completion_tokens=min(
-                    maximum, max(1, round(sample(timing.completion_tokens, self.rng)))
+                    maximum,
+                    max(
+                        1,
+                        round(
+                            tokens
+                            if tokens is not None
+                            else sample(timing.completion_tokens, self.rng)
+                        ),
+                    ),
                 ),
                 load_multiplier=multiplier,
                 latency_multiplier=latency,

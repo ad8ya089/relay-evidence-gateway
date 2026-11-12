@@ -1,0 +1,10 @@
+events: results/events.jsonl
+output: config/calibration.json
+seed: {value: 20261112, source: chosen, note: Deterministic calibration simulation}
+bootstrap_threshold: {value: 50, source: chosen, note: Design small-sample threshold}
+p99_min_samples: {value: 100, source: chosen, note: Required p99 reliability warning threshold}
+simulation_draws: {value: 5000, source: chosen, note: Monte Carlo comparison size}
+tail_probability: {value: 0.05, source: chosen, note: Assumed lognormal tail beyond empirical maxima}
+p99_ratio_tolerance: {value: 0.25, source: chosen, note: Required percentile mismatch warning}
+sequential_run_ids: []
+burst_run_ids: []

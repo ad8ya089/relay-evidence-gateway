@@ -12,6 +12,7 @@ from starlette.responses import Response
 from relay.obs.clock import Clock, SystemClock
 from relay.providers.base import LLMRequest
 from standin.admin import admin_router
+from standin.calibrate import CalibrationReport
 from standin.generation import InvalidInput
 from standin.profile import Profile, load_profile
 from standin.quota import retry_header
@@ -113,9 +114,22 @@ def create_app(
     clock: Clock | None = None,
     rng: random.Random | None = None,
     sleep: Sleep = asyncio.sleep,
+    calibration: CalibrationReport | None = None,
 ) -> FastAPI:
     selected = load_profile(profile) if isinstance(profile, str) else profile.runnable()
-    simulation = Simulation(selected, clock if clock is not None else SystemClock(), rng)
+    fitted = None
+    if calibration is not None and calibration.status == "calibrated":
+        if calibration.model != selected.model:
+            raise ValueError("Calibration model must match the stand-in profile")
+        fitted = calibration.kinds
+        data = selected.model_dump()
+        if calibration.alpha.source == "fitted":
+            data["alpha"] = calibration.alpha.model_dump()
+        for name, value in calibration.faults.items():
+            if value.source == "fitted":
+                data["faults"][name] = value.model_dump()
+        selected = Profile.model_validate(data)
+    simulation = Simulation(selected, clock if clock is not None else SystemClock(), rng, fitted)
     application = FastAPI(title="Relay local stand-in")
     application.state.simulation = simulation
     application.include_router(admin_router(simulation))

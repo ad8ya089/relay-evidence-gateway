@@ -10,6 +10,7 @@ from relay.obs.clock import Clock
 from relay.providers.base import LLMRequest
 from relay.retrieval.tokenizer import get_encoding
 from standin.cache import CacheLookup, PrefixCache, prompt_tokens
+from standin.distributions import KindFit
 from standin.faults import Decision, Sampler
 from standin.generation import InvalidInput, call_kind, generate
 from standin.profile import Profile
@@ -57,11 +58,17 @@ class QuotaRejected(Exception):
 
 
 class Simulation:
-    def __init__(self, profile: Profile, clock: Clock, rng: random.Random | None = None) -> None:
+    def __init__(
+        self,
+        profile: Profile,
+        clock: Clock,
+        rng: random.Random | None = None,
+        calibration: dict[str, KindFit] | None = None,
+    ) -> None:
         self.profile = profile.runnable()
         self.clock = clock
         self.lock = threading.RLock()
-        self.sampler = Sampler(profile, rng)
+        self.sampler = Sampler(profile, rng, calibration)
         self.quotas = Quotas(clock, profile.window_s.value)
         self.cache = PrefixCache(clock)
         self.inflight = 0
@@ -148,6 +155,7 @@ class Simulation:
                 "profile": self.profile.model_dump(mode="json"),
                 "model": self.profile.model,
                 "seed": self.profile.seed.value,
+                "calibration_kinds": list(self.sampler.calibration),
                 "inflight": self.inflight,
                 "capacity": self.profile.capacity.value,
                 "models": {
