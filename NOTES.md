@@ -165,3 +165,33 @@ provides the human-authored evaluation set.
   latency is not measured. Before P4/P5, measure startup/warm costs and decide
   how model preparation and the deadline policy fit together; no deadline claim
   is made for the as-yet-unimplemented application.
+
+# P2 decisions (12 November 2026)
+
+P2 extends the existing P1 commit; no supplied document is edited. Real Groq
+execution is prohibited during this implementation, including both probe scripts.
+
+For P5, select conservative reconciliation: retain local usage and outstanding
+reservations, timestamp provider observations with the monotonic clock, and use
+the smaller of the local available capacity and the latest valid provider
+snapshot. Older/out-of-order observations cannot increase capacity. Reconcile
+reservations with actual usage, and allow window recovery only through modelled
+expiry/reset. P2 captures observations; it does not implement the P5 limiter.
+
+Unknown/malformed 429 evidence maps to `rate_limit_unknown`; Retry-After alone
+does not establish minute versus daily scope. Runtime classification patterns
+remain empty until explicitly supplied from actual evidence. Test fixtures are
+hypothetical, not claims about Groq's error messages.
+
+The [Groq Structured Outputs documentation](https://console.groq.com/docs/structured-outputs)
+was checked on 12 November 2026: streaming is not supported with Structured
+Outputs. Production paths are non-streaming JSON Schema and streaming JSON Object
+with application-side validation. A schema/stream experiment remains explicitly
+opt-in for the probe. An explicit pre-dispatch compatibility conversion may
+choose JSON Object for this documented combination; arbitrary failures never
+cause an automatic downgrade or another HTTP attempt.
+
+The [Groq rate-limit documentation](https://console.groq.com/docs/rate-limits)
+identifies request headers as RPD and token headers as TPM. Additional headers
+are retained without inventing meanings. Account-specific quotas and actual
+response shapes remain unverified; P2 does not measure them.
