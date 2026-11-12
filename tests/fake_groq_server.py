@@ -36,6 +36,7 @@ class FakeGroqServer:
         self.payloads: list[dict[str, object]] = []
         self.paths: list[str] = []
         self.echo = "FAKE-echo-canary"
+        self.retry_after = "2"
         self.disconnected = asyncio.Event()
         self.entered = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
@@ -112,9 +113,19 @@ class FakeGroqServer:
                 "unavailable": 503,
                 "auth": 401,
                 "created": 201,
+                "bad-request": 400,
             }.get(mode, 200)
             body = completion()
-            if mode in {"minute", "day", "unknown", "echo", "server", "unavailable", "auth"}:
+            if mode in {
+                "minute",
+                "day",
+                "unknown",
+                "echo",
+                "server",
+                "unavailable",
+                "auth",
+                "bad-request",
+            }:
                 body = {"error": {"code": f"FAKE_{mode.upper()}", "message": self.echo}}
             if mode == "missing-usage":
                 body.pop("usage")
@@ -127,7 +138,7 @@ class FakeGroqServer:
                 "X-RateLimit-Limit-Requests: 1000\r\nX-RateLimit-Remaining-Requests: 999\r\n"
                 "X-RateLimit-Limit-Tokens: 8000\r\nX-RateLimit-Remaining-Tokens: 7000\r\n"
                 "X-Request-Id: FAKE-request\r\nAuthorization: Bearer FAKE-response-header\r\n"
-                + ("Retry-After: 2\r\n" if status == 429 else "")
+                + (f"Retry-After: {self.retry_after}\r\n" if status == 429 else "")
                 + "\r\n"
             )
             writer.write(headers.encode() + content)

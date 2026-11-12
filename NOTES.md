@@ -195,3 +195,99 @@ The [Groq rate-limit documentation](https://console.groq.com/docs/rate-limits)
 identifies request headers as RPD and token headers as TPM. Additional headers
 are retained without inventing meanings. Account-specific quotas and actual
 response shapes remain unverified; P2 does not measure them.
+
+## P2 implementation and verification
+
+The clock protocol provides `monotonic_ns()` and UTC-aware `utc_now()`.
+`SystemClock` uses the corresponding system clocks; `FakeClock` advances only
+when instructed and permits independent UTC jumps. Provider durations, content
+TTFT, reasoning-delta timestamps, event offsets and cooldowns use monotonic time.
+UTC wall-clock is used for persisted ledger/probe provenance, as P2 explicitly
+requires, rather than elapsed-time arithmetic.
+
+Events retain the architecture's `rid`, `run`, `t_ms`, `ev` envelope and
+`usage.in/out/cached` and `hdr.rem_tok/rem_req/reset_tok` fields. Additional safe
+headers and timestamped quota observations are additive. One locked JSON append
+prevents interleaving; persistence failures raise `EventWriteError`. Recursive
+redaction removes authorization fields, masks sensitive values and registered
+credentials, rejects raw environment mappings, and bounds response/error bodies
+to 500 characters, including structured bodies. Probe JSON and JSONL use the
+same sanitizer; raw outgoing paper/message bodies are not logged.
+
+SQLite retains all ten required `calls` columns and adds session/request IDs,
+status/error details, total/countable usage and reservations. WAL, explicit
+transactions and indexes support atomic inserts and model/UTC-day/session
+queries. Each dispatched attempt has its own durable record, including 429s;
+this is local attempt accounting, not a claim about provider quota consumption.
+Known countable usage is input minus cached plus output; reasoning tokens are
+never added again. Missing raw usage stays NULL and is reported as unknown.
+Pending/unknown attempts conservatively retain their reservation, increased by
+larger known partial/total evidence. Inconsistent historical usage fails closed.
+Known usage reconciles the reservation without deleting the attempted request.
+
+The provider uses raw `httpx.AsyncClient`, four explicit timeouts, zero transport
+retries, no redirects and no proxy environment. It parses optional usage/timing
+fields defensively and preserves status and safe request IDs. Malformed output,
+JSON validation, HTTP errors, timeouts, disconnects, cancellation and persistence
+failures have typed outcomes. Known usage survives output-validation failure.
+Non-streaming TTFT remains unavailable. The SSE parser supports keep-alives,
+multiline data, usage-only/final usage chunks and `[DONE]`; reasoning and content
+times are separate, and only actual content determines TTFT. Cancellation closes
+the response and settles accounting before propagating cancellation. Internal
+delta callbacks are intended for future orchestrator buffering; no client-facing
+application or unvalidated-response delivery is implemented in P2.
+
+External requests require both permission gates, an allowed HTTPS origin, a
+credential, a durable ledger and an atomic positive token reservation. Guards
+share a default process session across instances; outstanding calls count before
+I/O, preventing concurrent cap bypass. Local literal-loopback requests use no
+real credential and are marked `real=false`. No provider SDK, hidden retry,
+P3 stand-in service, P4 orchestrator or P5 limiter was added. The localhost fake
+HTTP server exists only in tests and uses ephemeral registered ports.
+
+Both probe entrypoints default to planning only, before credential lookup,
+provider-client construction or opening a ledger. Execution requires `--local`
+or both real permission gates and explicit confirmation (`RUN`/`--confirm RUN`).
+Real limit experiments additionally require supplied account limits and verified
+remaining-day headroom. All phases share the guarded session, stop on daily
+evidence/cap/persistence failures, and honor the longest outstanding Retry-After
+deadline. An excessive cooldown aborts instead of sending early. Recovery is
+the first observed HTTP 2xx after a 429, separately from JSON validity.
+
+Executed on Python 3.12.10 with the existing locked dependencies:
+
+- Complete suite through `make test`: **142 passed** (including all 58 P1 tests).
+- `ruff check .`: passed. `ruff format --check .`: 79 files already formatted.
+- Mypy is not configured; no mypy result is claimed.
+- `python -m scripts.probe_groq --dry-run --experiment-stream-schema`: at most
+  3 requests and 648 estimated tokens; no client/ledger/network opened.
+- `python -m scripts.limit_probe --dry-run`: at most 56 requests and 15,690
+  estimated tokens: RPM 40/4,800, TPM 3/9,330, concurrency 8/960, recovery 5/600.
+  The TPM phase remains below the specified 10K estimated-token ceiling.
+- `make probe` produced the same limit plan; `make probe-shapes` planned the
+  two default shapes (2 requests, 432 estimated tokens). Both opened no client,
+  ledger or network connection.
+- Probe execution, including subprocess entrypoints, passed against the fake
+  localhost service. Tests cover cancellation/connection closure, malformed and
+  incomplete streams, unknown usage, header interpretation, 429 fixtures,
+  cooldowns, parallel reservations, default refusal, no hidden retry, sanitizing
+  artifacts and failed persistence. External-origin guard tests use mock HTTP
+  transports and synthetic credentials, never the Groq service.
+- No real Groq API request was sent. No real shape/limit result is claimed.
+- Original 11 supplied documents are unchanged. Complete P2 source inventory is
+  in `P2_FILES.txt`; generated databases, probe outputs and caches stay untracked.
+
+Timeouts, offered rates, tokenizer overhead and probe safety fractions are
+explicit assumed engineering settings in YAML. Local token estimates are never
+presented as actual provider usage; unknown account limits/headroom remain NULL.
+Production error-pattern configuration is deliberately empty until observed
+evidence exists. Real account quotas, streaming response/usage shapes, actual
+model behavior and latency remain unmeasured. The optional fake-server schema
+streaming experiment proves tooling/parsing only, not Groq compatibility.
+
+Suggested original-document updates (not applied): align design D8 with the
+selected conservative P5 policy; describe unknown 429 outcomes and nullable
+usage; state the schema/streaming split and explicit compatibility policy; and
+update the runbook to explain that `make probe` and `make probe-shapes` now
+default to dry runs. Existing P1 notes above are historical, including the guard's
+former non-refunding behavior; P2's durable reconciliation supersedes it.

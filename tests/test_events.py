@@ -52,3 +52,17 @@ def test_writer_surfaces_persistence_and_serialisation_errors(tmp_path: Path) ->
         writer.write(context, "call_end")
     with pytest.raises(EventWriteError, match="unsupported"):
         writer.write(context, "call_end", unsafe=object())
+
+
+def test_structured_body_and_alternate_token_fields_are_safe(tmp_path: Path) -> None:
+    writer = EventWriter(tmp_path / "events.jsonl")
+    context = EventContext(rid="r", run="test", arrival_ns=writer.clock.monotonic_ns())
+    writer.write(
+        context,
+        "call_error",
+        body={"message": "x" * 1000},
+        nested={"api-token": "FAKE-token-canary", "bearer_token": "FAKE-bearer-canary"},
+    )
+    raw = writer.path.read_text()
+    assert "FAKE-token-canary" not in raw and "FAKE-bearer-canary" not in raw
+    assert len(json.loads(raw)["body"]) == 500

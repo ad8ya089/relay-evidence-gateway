@@ -6,7 +6,7 @@ import json
 from contextlib import nullcontext
 
 import httpx
-from pydantic import SecretStr
+from pydantic import JsonValue, SecretStr
 
 from relay.control.ledger import CallRecord, Ledger, LedgerError
 from relay.obs.clock import Clock, SystemClock
@@ -107,6 +107,14 @@ class GroqCompatibleProvider:
     def _emit(self, context: EventContext, ev: str, **fields: object) -> None:
         if self.events is not None:
             self.events.write(context, ev, **fields)
+
+    @staticmethod
+    def _event_headers(snapshot: HeaderSnapshot) -> dict[str, JsonValue]:
+        return snapshot.headers | {
+            "rem_tok": snapshot.remaining_tokens_tpm,
+            "rem_req": snapshot.remaining_requests_rpd,
+            "reset_tok": snapshot.headers.get("x-ratelimit-reset-tokens"),
+        }
 
     def _error(
         self,
@@ -270,7 +278,10 @@ class GroqCompatibleProvider:
             model=request.model or self.model,
             response_model=state.response_model,
             completion_id=state.completion_id,
-            provider_request_id=state.provider_request_id,
+            provider_request_id=state.provider_request_id
+            or snapshot.headers.get("x-request-id")
+            or snapshot.headers.get("request-id")
+            or snapshot.headers.get("x-groq-id"),
             status_code=response.status_code,
             usage=state.usage,
             usage_complete=state.usage.complete,
@@ -319,8 +330,10 @@ class GroqCompatibleProvider:
             completion_id=identifier(body.get("id")),
             status_code=200,
             provider_request_id=identifier(metadata.get("id"))
-            if isinstance(metadata, dict)
-            else None,
+            if isinstance(metadata, dict) and isinstance(metadata.get("id"), str)
+            else snapshot.headers.get("x-request-id")
+            or snapshot.headers.get("request-id")
+            or snapshot.headers.get("x-groq-id"),
             usage=usage,
             usage_complete=usage.complete,
             header_snapshot=snapshot,
@@ -424,8 +437,9 @@ class GroqCompatibleProvider:
                 "call_end",
                 call_id=request.metadata.call_id,
                 status=status,
-                usage=result.usage.model_dump(),
-                hdr=snapshot.headers,
+                usage=result.usage.model_dump(by_alias=True),
+                hdr=self._event_headers(snapshot),
+                quota=snapshot.model_dump(exclude={"headers"}),
                 total_ms=result.total_ms,
                 source="real" if self.is_real else "stand-in",
                 model=result.model,
@@ -446,8 +460,8 @@ class GroqCompatibleProvider:
                 call_id=request.metadata.call_id,
                 reason="cancelled",
                 status=status,
-                hdr=snapshot.headers,
-                usage=state.usage.model_dump(),
+                hdr=self._event_headers(snapshot),
+                usage=state.usage.model_dump(by_alias=True),
                 total_ms=(self.clock.monotonic_ns() - start) / 1_000_000,
                 source="real" if self.is_real else "stand-in",
             )
@@ -456,7 +470,7 @@ class GroqCompatibleProvider:
             cancelled.info.safe_context.update(
                 {
                     "dispatched": dispatched,
-                    "headers_observed_ns": snapshot.observed_ns,
+                    "headers_observed_ns": snapshot.observed_ns if status is not None else None,
                     "first_reasoning_delta_ms": state.first_reasoning_ms,
                     "first_content_delta_ms": state.first_content_ms,
                 }
@@ -488,7 +502,7 @@ class GroqCompatibleProvider:
             error.info.safe_context.update(
                 {
                     "dispatched": dispatched,
-                    "headers_observed_ns": snapshot.observed_ns,
+                    "headers_observed_ns": snapshot.observed_ns if status is not None else None,
                     "first_reasoning_delta_ms": state.first_reasoning_ms,
                     "first_content_delta_ms": state.first_content_ms,
                 }
@@ -517,9 +531,9 @@ class GroqCompatibleProvider:
                     status=error.status,
                     reason=error.kind,
                     body_trunc=error.body_trunc,
-                    hdr=error.headers,
+                    hdr=self._event_headers(snapshot),
                     total_ms=error.info.total_ms,
-                    usage=state.usage.model_dump(),
+                    usage=state.usage.model_dump(by_alias=True),
                     source="real" if self.is_real else "stand-in",
                     safe_context=error.info.safe_context,
                 )

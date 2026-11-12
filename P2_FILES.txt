@@ -1,0 +1,35 @@
+P2 files relative to C:\dev\relay-evidence-gateway
+Baseline: 7d295c614d4fe752905fde1716ca5c2403fcaeb7
+A = created; M = changed
+
+A	config/ledger.yaml
+A	config/probes.yaml
+A	config/provider.yaml
+A	P2_FILES.txt
+A	relay/providers/errors.py
+A	relay/providers/parsing.py
+A	relay/providers/settings.py
+A	relay/providers/streaming.py
+A	scripts/probe_common.py
+A	tests/fake_groq_server.py
+A	tests/test_clock.py
+A	tests/test_events.py
+A	tests/test_guard_ledger.py
+A	tests/test_ledger.py
+A	tests/test_probes.py
+A	tests/test_provider_accounting.py
+A	tests/test_provider_contracts.py
+A	tests/test_provider_errors.py
+A	tests/test_provider_http.py
+A	tests/test_provider_streaming.py
+M	Makefile
+M	NOTES.md
+M	relay/control/ledger.py
+M	relay/obs/clock.py
+M	relay/obs/events.py
+M	relay/providers/base.py
+M	relay/providers/groq.py
+M	relay/providers/guard.py
+M	scripts/limit_probe.py
+M	scripts/probe_groq.py
+M	tests/conftest.py

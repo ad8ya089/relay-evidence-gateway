@@ -1,0 +1,20 @@
+# Probe shapes/rates are assumed engineering choices, not Groq limits or calibration.
+model: openai/gpt-oss-20b
+real_base_url: https://api.groq.com/openai/v1
+local_base_url: http://127.0.0.1:8081/openai/v1
+reasoning_effort: low
+shapes_max_completion_tokens: 128
+limit_max_completion_tokens: 32
+reservation_overhead_tokens: 64  # assumed allowance; tokenizer estimates are not provider usage
+rpm_requests: 40
+rpm_rates: [6, 12, 24, 48]  # offered rates, chosen; not account limits
+tpm_requests: 3
+tpm_input_tokens: 3000
+concurrency_requests: 8
+recovery_requests: 5
+recovery_interval_s: 2.0
+max_recovery_wait_s: 30.0
+daily_safety_fraction: 0.70
+account_limits: {rpm: null, tpm: null, rpd: null, tpd: null}
+remaining_day_requests: null
+remaining_day_tokens: null

@@ -106,9 +106,10 @@ class LLMRequest(BaseModel):
 
 
 class Usage(BaseModel):
-    tokens_in: int | None = Field(default=None, ge=0)
-    tokens_out: int | None = Field(default=None, ge=0)
-    tokens_cached: int | None = Field(default=None, ge=0)
+    model_config = ConfigDict(populate_by_name=True)
+    tokens_in: int | None = Field(default=None, ge=0, alias="in")
+    tokens_out: int | None = Field(default=None, ge=0, alias="out")
+    tokens_cached: int | None = Field(default=None, ge=0, alias="cached")
     total_tokens: int | None = Field(default=None, ge=0)
     reasoning_tokens: int | None = Field(default=None, ge=0)
     queue_time: float | None = Field(default=None, ge=0)

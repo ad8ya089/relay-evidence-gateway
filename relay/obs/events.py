@@ -21,10 +21,12 @@ class EventWriteError(RuntimeError):
 class Sanitizer:
     def __init__(self, secrets: Sequence[str] = ()) -> None:
         self._secrets = set(secret for secret in secrets if secret)
+        self._lock = threading.RLock()
 
     def register_secret(self, secret: str) -> None:
         if secret:
-            self._secrets.add(secret)
+            with self._lock:
+                self._secrets.add(secret)
 
     @staticmethod
     def sensitive_key(key: str) -> bool:
@@ -34,6 +36,8 @@ class Sanitizer:
             for term in (
                 "authorization",
                 "apikey",
+                "apitoken",
+                "bearertoken",
                 "password",
                 "secret",
                 "credential",
@@ -43,7 +47,9 @@ class Sanitizer:
         )
 
     def text(self, value: str, *, body: bool = False) -> str:
-        for secret in sorted(self._secrets, key=len, reverse=True):
+        with self._lock:
+            secrets = tuple(self._secrets)
+        for secret in sorted(secrets, key=len, reverse=True):
             value = value.replace(secret, REDACTED)
         value = re.sub(r"gsk_[A-Za-z0-9_-]+", REDACTED, value)
         value = re.sub(r"(?i)\bBearer\s+[^\s,\"'}]+", REDACTED, value)
@@ -59,6 +65,8 @@ class Sanitizer:
             return REDACTED
         if type(value).__name__ == "_Environ":
             return REDACTED
+        if "body" in key.casefold() and value is not None and not isinstance(value, str):
+            return self.text(json.dumps(self.value(value), allow_nan=False), body=True)
         if isinstance(value, str):
             return self.text(value, body="body" in key.casefold())
         if value is None or isinstance(value, (bool, int, float)):
@@ -95,11 +103,18 @@ class Event(BaseModel):
 
 class EventWriter:
     def __init__(
-        self, path: Path, *, clock: Clock | None = None, secrets: Sequence[str] = ()
+        self,
+        path: Path,
+        *,
+        clock: Clock | None = None,
+        secrets: Sequence[str] = (),
+        sanitizer: Sanitizer | None = None,
     ) -> None:
         self.path = path
         self.clock = clock if clock is not None else SystemClock()
-        self.sanitizer = Sanitizer(secrets)
+        self.sanitizer = sanitizer if sanitizer is not None else Sanitizer()
+        for secret in secrets:
+            self.sanitizer.register_secret(secret)
         self._lock = threading.RLock()
 
     def write(self, context: EventContext, ev: str, **fields: object) -> Event:

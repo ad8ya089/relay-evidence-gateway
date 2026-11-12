@@ -65,3 +65,5 @@ def test_usage_is_nullable_and_reasoning_is_not_added_twice() -> None:
     assert not usage.model_copy(update={"total_tokens": 130}).complete
     error = ProviderError(ProviderFailure(kind="rate_limit_unknown", status_code=429))
     assert error.kind == "rate_limit_unknown" and error.status == 429
+    event_usage = usage.model_dump(by_alias=True)
+    assert Usage.model_validate(event_usage).counted_tokens == 90

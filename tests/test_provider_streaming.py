@@ -185,3 +185,32 @@ async def test_multiline_data_comments_and_usage_only_framing() -> None:
     values = [value async for value in sse_data(lines())]
     assert json.loads(values[0]) == {"choices": []}
     assert values[1] == ""
+
+
+async def test_callback_failure_closes_stream_without_exposing_exception_text(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock(utc=datetime(2026, 11, 12, tzinfo=UTC))
+    stream = TimedStream(clock)
+    key = "FAKE-callback-secret-canary"
+    writer = EventWriter(tmp_path / "events.jsonl", clock=clock)
+
+    async def broken(delta: StreamDelta) -> None:
+        raise RuntimeError(key)
+
+    async with GroqCompatibleProvider(
+        "http://127.0.0.1/openai/v1",
+        key,
+        "FAKE",
+        clock=clock,
+        events=writer,
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(
+                200, stream=stream, headers={"content-type": "text/event-stream"}
+            )
+        ),
+    ) as provider:
+        with pytest.raises(ProviderError) as raised:
+            await provider.complete(request(stream=True), on_delta=broken)
+    assert raised.value.kind == "callback" and stream.closed
+    assert key not in writer.path.read_text() + str(raised.value)

@@ -113,3 +113,57 @@ async def test_nonstream_duration_uses_injected_clock() -> None:
         result = await provider.complete(request())
     assert result.total_ms == 12.5 and result.provider_ttft_ms is None
     assert json.loads(result.text)["answer"] == "FAKE evidence"
+
+
+async def test_request_identifier_falls_back_to_observed_header() -> None:
+    body = completion()
+    body.pop("x_groq")
+    async with GroqCompatibleProvider(
+        "http://127.0.0.1/openai/v1",
+        None,
+        "FAKE",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(
+                200, json=body, headers={"x-request-id": "FAKE-header-request"}
+            )
+        ),
+    ) as provider:
+        result = await provider.complete(request())
+    assert result.provider_request_id == "FAKE-header-request"
+
+
+async def test_arbitrary_400_does_not_downgrade_json_schema(fake_server: FakeGroqServer) -> None:
+    from relay.providers.base import JsonSchemaDefinition
+    from tests.test_provider_contracts import Answer
+
+    fake_server.mode = "bad-request"
+    schema = ResponseFormat(
+        type="json_schema",
+        json_schema=JsonSchemaDefinition(name="answer", schema_spec=Answer.model_json_schema()),
+    )
+    async with GroqCompatibleProvider(fake_server.base_url, None, "FAKE") as provider:
+        with pytest.raises(ProviderError) as raised:
+            await provider.complete(
+                request(response_format=schema, schema_stream_policy="json_object")
+            )
+    assert raised.value.kind == "bad_request" and fake_server.request_count == 1
+    assert fake_server.payloads[0]["response_format"]["type"] == "json_schema"
+
+
+async def test_provider_event_fields_match_architecture_usage_and_headers(
+    fake_server: FakeGroqServer,
+    tmp_path: Path,
+) -> None:
+    writer = EventWriter(tmp_path / "events.jsonl")
+    async with GroqCompatibleProvider(
+        fake_server.base_url, None, "FAKE", events=writer
+    ) as provider:
+        result = await provider.complete(request())
+    end = next(
+        json.loads(line)
+        for line in writer.path.read_text().splitlines()
+        if json.loads(line)["ev"] == "call_end"
+    )
+    assert (end["usage"]["in"], end["usage"]["out"], end["usage"]["cached"]) == (100, 20, 30)
+    assert end["hdr"]["rem_req"] == 999 and end["hdr"]["rem_tok"] == 7000
+    assert end["quota"]["observed_ns"] == result.header_snapshot.observed_ns
