@@ -128,9 +128,14 @@ class RealCallGuard:
                 if call_id not in self._pending:
                     raise RealCallDenied("Unknown or already reconciled reservation")
                 reserved = self._pending.pop(call_id)
-                self._tokens += (
-                    usage.counted_tokens if usage.counted_tokens is not None else reserved
-                ) - reserved
+                charge = usage.counted_tokens
+                if charge is None:
+                    charge = max(
+                        reserved,
+                        usage.total_tokens or 0,
+                        (usage.tokens_in or 0) + (usage.tokens_out or 0),
+                    )
+                self._tokens += charge - reserved
                 charged, requests = self._tokens, self._requests
                 inconsistent = False
             return GuardSettlement(

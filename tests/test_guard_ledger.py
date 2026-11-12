@@ -97,3 +97,16 @@ def test_underestimated_actual_usage_exposes_exceeded_cap(tmp_path: Path) -> Non
         assert settlement.cap_exceeded
         with pytest.raises(RealCallDenied):
             safety.reserve(1, record=attempt(2))
+
+
+def test_partial_usage_cannot_hide_an_overrun_behind_missing_cached_tokens(tmp_path: Path) -> None:
+    with Ledger(tmp_path / "usage.sqlite3") as ledger:
+        safety = guard(ledger)
+        safety.reserve(80, record=attempt(1))
+        settlement = safety.reconcile(
+            "c1", usage=Usage(tokens_in=100, tokens_out=20, total_tokens=120), status="ok"
+        )
+        row = ledger.get_call("c1")
+        assert row.tokens_cached is None and row.counted_tokens is None
+        assert settlement.usage_unknown and settlement.charged_tokens == 120
+        assert settlement.cap_exceeded

@@ -8,6 +8,7 @@ from contextlib import nullcontext
 import httpx
 from pydantic import SecretStr
 
+from relay.control.ledger import CallRecord, Ledger, LedgerError
 from relay.obs.clock import Clock, SystemClock
 from relay.obs.events import EventContext, EventWriteError, EventWriter, Sanitizer
 from relay.providers.base import (
@@ -16,6 +17,7 @@ from relay.providers.base import (
     HeaderSnapshot,
     LLMRequest,
     LLMResult,
+    ProviderCancelledError,
     ProviderDiagnostics,
     ProviderError,
     ProviderFailure,
@@ -24,6 +26,7 @@ from relay.providers.base import (
     Usage,
 )
 from relay.providers.errors import classify_error, header_snapshot
+from relay.providers.guard import GuardSettlement, RealCallDenied, RealCallGuard
 from relay.providers.parsing import ResponseState, parse_usage, validate_output
 from relay.providers.settings import ProviderSettings, provider_settings
 from relay.providers.streaming import DeltaCallbackError, StreamDisconnectedError, consume_stream
@@ -58,10 +61,18 @@ class GroqCompatibleProvider:
         clock: Clock | None = None,
         events: EventWriter | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        ledger: Ledger | None = None,
+        guard: RealCallGuard | None = None,
+        session_id: str | None = None,
     ) -> None:
         self.settings = settings if settings is not None else provider_settings()
         self.clock = clock if clock is not None else SystemClock()
         self.events = events
+        self.ledger = ledger
+        self.guard = guard
+        self.session_id = guard.session_id if guard is not None else session_id or "stand-in"
+        if guard is not None and guard.ledger is not ledger:
+            raise ValueError("Provider and guard must share the same ledger")
         self.model = model
         self.is_real = not is_loopback_url(base_url)
         self._api_key = SecretStr(api_key or "")
@@ -120,12 +131,20 @@ class GroqCompatibleProvider:
 
     def _prepare(self, request: LLMRequest, context: EventContext) -> LLMRequest:
         if self.is_real:
-            raise ProviderError(
-                ProviderFailure(
-                    kind="auth",
-                    safe_context={"reason": "External calls require guard/ledger integration"},
-                )
-            )
+            url = self._client.base_url
+            if (
+                url.scheme != "https"
+                or url.host not in self.settings.allowed_real_hosts
+                or url.port not in {None, 443}
+            ):
+                raise RealCallDenied("External origin is not an allowed TLS provider")
+            if self.guard is None or self.ledger is None:
+                raise RealCallDenied("External calls require a durable real-call guard and ledger")
+            self.guard.check_permissions()
+            if not self._api_key.get_secret_value():
+                raise RealCallDenied("An API credential is required for this external provider")
+            if request.token_reservation is None:
+                raise RealCallDenied("A conservative token reservation is required before dispatch")
         if request.stream and request.response_format is not None:
             if request.response_format.type == "json_schema":
                 if request.schema_stream_policy == "reject":
@@ -149,6 +168,63 @@ class GroqCompatibleProvider:
                         update={"response_format": ResponseFormat(type="json_object")}
                     )
         return request
+
+    def _begin_attempt(self, request: LLMRequest) -> str | None:
+        if self.ledger is None:
+            return None
+        safe = self.sanitizer.text
+        record = CallRecord(
+            id=safe(request.metadata.call_id),
+            run_id=safe(request.metadata.run_id),
+            ts_utc=self.clock.utc_now(),
+            kind=safe(request.metadata.kind),
+            model=safe(request.model or self.model),
+            status="pending",
+            real=self.is_real,
+            session_id=safe(self.session_id),
+            request_id=safe(request.metadata.request_id),
+            reserved_tokens=request.token_reservation or 0,
+        )
+        if self.is_real:
+            assert self.guard is not None and request.token_reservation is not None
+            return self.guard.reserve(request.token_reservation, record=record)
+        self.ledger.record_call(record)
+        return record.id
+
+    def _settle_attempt(
+        self,
+        call_id: str | None,
+        usage: Usage,
+        *,
+        status: str,
+        status_code: int | None,
+        error_kind: str | None = None,
+    ) -> GuardSettlement | None:
+        if call_id is None:
+            return None
+        if self.is_real:
+            assert self.guard is not None
+            return self.guard.reconcile(
+                call_id, usage=usage, status=status, status_code=status_code, error_kind=error_kind
+            )
+        assert self.ledger is not None
+        self.ledger.finish_call(
+            call_id,
+            status=status,
+            status_code=status_code,
+            error_kind=error_kind,
+            tokens_in=usage.tokens_in,
+            tokens_out=usage.tokens_out,
+            tokens_cached=usage.tokens_cached,
+            total_tokens=usage.total_tokens,
+        )
+        return None
+
+    @staticmethod
+    def _failure_status(kind: ErrorKind) -> str:
+        if kind.startswith("rate_limit_"):
+            return "rate_limited"
+        return "timeout" if kind in {"timeout", "cancelled"} else "error"
 
     async def _stream(
         self,
@@ -269,8 +345,12 @@ class GroqCompatibleProvider:
         state = ResponseState()
         raw_body = ""
         status: int | None = None
+        call_id: str | None = None
+        settled = False
+        dispatched = False
         try:
             request = self._prepare(request, context)
+            call_id = self._begin_attempt(request)
             self._emit(
                 context,
                 "call_start",
@@ -278,7 +358,7 @@ class GroqCompatibleProvider:
                 kind=request.metadata.kind,
                 attempt=request.metadata.attempt,
                 model=request.model or self.model,
-                source="stand-in",
+                source="real" if self.is_real else "stand-in",
             )
             auth = {}
             if self._api_key.get_secret_value():
@@ -286,6 +366,8 @@ class GroqCompatibleProvider:
             deadline = (
                 asyncio.timeout(request.timeout_ms / 1000) if request.timeout_ms else nullcontext()
             )
+            start = self.clock.monotonic_ns()  # Dispatch origin excludes guard/ledger setup.
+            dispatched = True
             async with (
                 deadline,
                 self._client.stream(
@@ -298,6 +380,12 @@ class GroqCompatibleProvider:
                 )
                 if not 200 <= status < 300:
                     raw = await response.aread()
+                    try:
+                        error_body = json.loads(raw)
+                    except ValueError:
+                        error_body = None
+                    if isinstance(error_body, dict):
+                        state.usage = parse_usage(error_body, diagnostics)
                     raise ProviderError(
                         classify_error(
                             status,
@@ -319,6 +407,18 @@ class GroqCompatibleProvider:
                     result = self._nonstream(raw, request, snapshot, start, diagnostics, state)
                 result.status_code = status
             result.total_ms = (self.clock.monotonic_ns() - start) / 1_000_000
+            settled = True
+            settlement = self._settle_attempt(
+                call_id, result.usage, status="ok", status_code=status
+            )
+            if settlement is not None and settlement.cap_exceeded:
+                raise self._error(
+                    "budget_exceeded",
+                    start,
+                    snapshot,
+                    usage=result.usage,
+                    reason="Reported usage exceeds a cap or has inconsistent totals",
+                )
             self._emit(
                 context,
                 "call_end",
@@ -327,13 +427,41 @@ class GroqCompatibleProvider:
                 usage=result.usage.model_dump(),
                 hdr=snapshot.headers,
                 total_ms=result.total_ms,
-                source="stand-in",
+                source="real" if self.is_real else "stand-in",
                 model=result.model,
             )
             return result
         except asyncio.CancelledError:
-            self._emit(context, "call_error", call_id=request.metadata.call_id, reason="cancelled")
-            raise
+            if not settled:
+                self._settle_attempt(
+                    call_id,
+                    state.usage,
+                    status="timeout",
+                    status_code=status,
+                    error_kind="cancelled",
+                )
+            self._emit(
+                context,
+                "call_error",
+                call_id=request.metadata.call_id,
+                reason="cancelled",
+                status=status,
+                hdr=snapshot.headers,
+                usage=state.usage.model_dump(),
+                total_ms=(self.clock.monotonic_ns() - start) / 1_000_000,
+                source="real" if self.is_real else "stand-in",
+            )
+            cancelled = self._error("cancelled", start, snapshot, usage=state.usage)
+            cancelled.info.status_code = status
+            cancelled.info.safe_context.update(
+                {
+                    "dispatched": dispatched,
+                    "headers_observed_ns": snapshot.observed_ns,
+                    "first_reasoning_delta_ms": state.first_reasoning_ms,
+                    "first_content_delta_ms": state.first_content_ms,
+                }
+            )
+            raise ProviderCancelledError(cancelled.info) from None
         except Exception as exc:
             if isinstance(exc, ProviderError):
                 error = exc
@@ -345,6 +473,10 @@ class GroqCompatibleProvider:
                 error = self._error("callback", start, snapshot, reason=type(exc).__name__)
             elif isinstance(exc, EventWriteError):
                 error = self._error("persistence", start, snapshot, reason=type(exc).__name__)
+            elif isinstance(exc, LedgerError):
+                error = self._error("persistence", start, snapshot, reason=type(exc).__name__)
+            elif isinstance(exc, RealCallDenied):
+                error = self._error("budget_exceeded", start, snapshot, reason=str(exc))
             else:
                 error = self._error("invalid_response", start, snapshot, reason=type(exc).__name__)
             if error.info.status_code is None:
@@ -353,6 +485,30 @@ class GroqCompatibleProvider:
             if not error.info.body_trunc:
                 error.info.body_trunc = diagnostics.body_trunc or raw_body
             error.info.total_ms = (self.clock.monotonic_ns() - start) / 1_000_000
+            error.info.safe_context.update(
+                {
+                    "dispatched": dispatched,
+                    "headers_observed_ns": snapshot.observed_ns,
+                    "first_reasoning_delta_ms": state.first_reasoning_ms,
+                    "first_content_delta_ms": state.first_content_ms,
+                }
+            )
+            if not settled:
+                try:
+                    self._settle_attempt(
+                        call_id,
+                        state.usage,
+                        status=self._failure_status(error.kind),
+                        status_code=error.status,
+                        error_kind=error.kind,
+                    )
+                except LedgerError:
+                    raise self._error(
+                        "persistence",
+                        start,
+                        snapshot,
+                        reason="Cannot finalise ledger; pending reservation retained",
+                    ) from None
             if error.kind != "persistence":
                 self._emit(
                     context,
@@ -363,5 +519,8 @@ class GroqCompatibleProvider:
                     body_trunc=error.body_trunc,
                     hdr=error.headers,
                     total_ms=error.info.total_ms,
+                    usage=state.usage.model_dump(),
+                    source="real" if self.is_real else "stand-in",
+                    safe_context=error.info.safe_context,
                 )
             raise error from None

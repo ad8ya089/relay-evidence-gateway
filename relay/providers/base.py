@@ -1,5 +1,6 @@
 """Provider-neutral contracts; Python acceptance is not wire capability evidence."""
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 from uuid import uuid4
@@ -208,6 +209,14 @@ class ProviderError(Exception):
     @property
     def headers(self) -> dict[str, str]:
         return self.info.headers
+
+
+class ProviderCancelledError(asyncio.CancelledError):
+    """Preserves normal cancellation semantics and safe attempt diagnostics."""
+
+    def __init__(self, info: ProviderFailure) -> None:
+        self.info = info
+        super().__init__("Provider request cancelled")
 
 
 class StreamDelta(BaseModel):

@@ -105,7 +105,9 @@ SELECT COUNT(*) AS attempts,
  COALESCE(SUM(usage_known = 0), 0) AS unknown_usage_count,
  COALESCE(SUM(total_tokens IS NULL), 0) AS unknown_total_count,
  COALESCE(SUM(status = 'pending'), 0) AS inflight_attempts,
- COALESCE(SUM(COALESCE(counted_tokens, reserved_tokens)), 0) AS guard_charged_tokens,
+ COALESCE(SUM(CASE WHEN counted_tokens IS NOT NULL THEN counted_tokens ELSE
+   MAX(reserved_tokens, COALESCE(total_tokens, 0),
+       COALESCE(tokens_in, 0) + COALESCE(tokens_out, 0)) END), 0) AS guard_charged_tokens,
  COALESCE(SUM(counted_tokens IS NULL AND reserved_tokens = 0), 0) AS unreserved_unknown_count,
  COALESCE(SUM(total_tokens IS NOT NULL AND tokens_in IS NOT NULL AND tokens_out IS NOT NULL
               AND total_tokens != tokens_in + tokens_out), 0) AS inconsistent_usage_count
