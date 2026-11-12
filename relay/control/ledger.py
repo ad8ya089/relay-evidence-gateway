@@ -81,6 +81,7 @@ class UsageSummary(BaseModel):
     inflight_attempts: int
     guard_charged_tokens: int
     unreserved_unknown_count: int
+    inconsistent_usage_count: int
 
 
 SCHEMA = """
@@ -105,7 +106,9 @@ SELECT COUNT(*) AS attempts,
  COALESCE(SUM(total_tokens IS NULL), 0) AS unknown_total_count,
  COALESCE(SUM(status = 'pending'), 0) AS inflight_attempts,
  COALESCE(SUM(COALESCE(counted_tokens, reserved_tokens)), 0) AS guard_charged_tokens,
- COALESCE(SUM(counted_tokens IS NULL AND reserved_tokens = 0), 0) AS unreserved_unknown_count
+ COALESCE(SUM(counted_tokens IS NULL AND reserved_tokens = 0), 0) AS unreserved_unknown_count,
+ COALESCE(SUM(total_tokens IS NOT NULL AND tokens_in IS NOT NULL AND tokens_out IS NOT NULL
+              AND total_tokens != tokens_in + tokens_out), 0) AS inconsistent_usage_count
 FROM calls WHERE
 """
 
@@ -169,6 +172,33 @@ class Ledger:
             raise DuplicateCallError("Call ID already recorded; retries require a new ID") from None
         except sqlite3.Error as exc:
             raise LedgerError(f"Cannot record attempt ({type(exc).__name__})") from None
+
+    def reserve_attempt(self, record: CallRecord, *, token_cap: int, request_cap: int) -> None:
+        """Atomic across connections/processes: pending attempts already consume caps."""
+        if not record.real or record.status != "pending" or record.reserved_tokens <= 0:
+            raise ValueError("Real reservations require a pending attempt and positive token bound")
+        if record.counted_tokens is not None:
+            raise ValueError("A reservation cannot already claim observed usage")
+        try:
+            with self._lock:
+                self._db.execute("BEGIN IMMEDIATE")
+                try:
+                    usage = self._summary("session_id = ? AND real = 1", (record.session_id,))
+                    if usage.unreserved_unknown_count or usage.inconsistent_usage_count:
+                        raise SessionCapExceeded("Prior unknown/unbounded usage requires review")
+                    if usage.attempts + 1 > request_cap:
+                        raise SessionCapExceeded("RELAY_REAL_REQUEST_CAP exhausted")
+                    if usage.guard_charged_tokens + record.reserved_tokens > token_cap:
+                        raise SessionCapExceeded("RELAY_REAL_TOKEN_CAP would be exceeded")
+                    self._insert(record)
+                    self._db.commit()
+                except (sqlite3.Error, LedgerError, ValueError):
+                    self._db.rollback()
+                    raise
+        except sqlite3.IntegrityError:
+            raise DuplicateCallError("Call ID already recorded") from None
+        except sqlite3.Error as exc:
+            raise LedgerError(f"Cannot reserve attempt ({type(exc).__name__})") from None
 
     def _summary(self, where: str, parameters: tuple[object, ...]) -> UsageSummary:
         row = self._db.execute(SUMMARY + where, parameters).fetchone()
