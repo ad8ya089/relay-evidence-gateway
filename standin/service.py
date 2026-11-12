@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from relay.obs.clock import Clock, SystemClock
 from relay.providers.base import LLMRequest
@@ -14,6 +15,7 @@ from standin.generation import InvalidInput
 from standin.profile import Profile, load_profile
 from standin.quota import retry_header
 from standin.simulation import Prepared, QuotaRejected, Simulation
+from standin.streaming import stream_response
 
 Sleep = Callable[[float], Awaitable[None]]
 
@@ -117,7 +119,7 @@ def create_app(
     application.state.simulation = simulation
 
     @application.post("/openai/v1/chat/completions")
-    async def completions(payload: LLMRequest, request: Request) -> JSONResponse:
+    async def completions(payload: LLMRequest, request: Request) -> Response:
         try:
             prepared = simulation.begin(payload)
         except InvalidInput as exc:
@@ -127,11 +129,12 @@ def create_app(
             )
         except QuotaRejected as exc:
             return quota_error(exc)
-        if payload.stream:
-            simulation.finish(prepared, success=False)
-            return JSONResponse(
-                status_code=400, content={"error": {"code": "streaming_pending_milestone"}}
-            )
+        if payload.stream and prepared.decision.fault not in {"server", "timeout"}:
+            # StreamingResponse owns disconnect monitoring; avoid concurrent ASGI receive readers.
+            async def wait(seconds: float) -> None:
+                await sleep(seconds)
+
+            return stream_response(prepared, simulation, wait)
         return await nonstream(request, prepared, simulation, sleep)
 
     return application
