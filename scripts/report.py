@@ -43,7 +43,8 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "times remain in diagnostics. No real A/B/C quality run passed the "
         "conservative quota/session "
         "preflight. Local stand-in A/B/C workflow results are separate and "
-        "ungraded. Official load scenarios "
+        "ungraded. Development-profile local load runs are labelled (dev); "
+        "official calibrated runs "
         "remain blocked. One unguessed observation: the real smoke was rejected for "
         "quote anchoring, "
         "not an HTTP failure; its full failure record is retained. Load rows have "
@@ -65,10 +66,10 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "bounds. Pressure mode "
         "reduces context and output limits; it never skips validation. Daily "
         "exhaustion permits eligible "
-        "verified cache hits and stops new model work. S4/S5 operational adaptation "
-        "and recovery times are "
-        "not measured; organization limits supplied by the candidate are not "
-        "substituted for observed headers.",
+        "verified cache hits and stops new model work. In development, minute-limit "
+        "halving did not bind at the tested rate; "
+        "daily-limit reduction rejected later uncached work. "
+        "Real recovery times remain not measured.",
         "A/B use lexical retrieval; C uses hybrid retrieval and attempts reranking, "
         "recording any fallback. "
         "No setting is selected on answer quality because human grading is pending. "
@@ -85,14 +86,18 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "(dynamic_chunking-v2-p2-c7), not the smoothing/ratio-loss sections. "
         "These are ranking mismatches, not proof that the full top-k set or "
         "final answer failed. A01's top hit was the correct attention section.",
-        "One owner enforces bounded retries, jitter, deadlines and the global retry "
-        "budget; HTTP retries "
-        "are disabled. The real smoke disabled transient retries entirely. Repair "
-        "is separate workflow "
-        "work and was denied when the existing budget check could not admit it. The "
-        "unsafe naive policy "
-        "can duplicate slow work in regression tests; a calibrated S7a/S7b "
-        "comparison is not measured.",
+        "One owner enforces bounded retries, jitter, deadlines and a global budget; "
+        "HTTP retries are off. "
+        "In paired uncalibrated development runs (same seed, workload, schedule and faults), "
+        f"naive success was {metrics['retry_naive']['outcomes']['ok']:.1f}% versus "
+        f"bounded {metrics['retry_bounded']['outcomes']['ok']:.1f}% "
+        f"({metrics['retry_naive']['sent']} requests each). "
+        f"Naive used {metrics['retry_naive']['provider_calls_total']} provider calls versus "
+        f"{metrics['retry_bounded']['provider_calls_total']}; "
+        "shielded slow work spawned duplicates. "
+        "Naive successful latency percentiles lack samples (n=1). "
+        "Generator lag exceeded the "
+        "configured threshold in the naive run; this is local evidence, not a Groq prediction.",
         message("daily_budget_exhausted")
         + " The API returns 429/503 with Retry-After only when known. "
         "No real daily reset promise is made. Verified cache results remain eligible.",
@@ -107,30 +112,16 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "instead of hiding it.",
         "CANDIDATE INPUT REQUIRED: personal feedback on Vaani has not been supplied. No homepage "
         "experience or opinion is attributed to the candidate by the assistant.",
-        "The P4 prompt fixed the evidence and sealed-delivery boundary; P6 required "
-        "open-loop, client-side "
-        "measurement; the final master prompt authorized explicit guarded "
-        "real-provider wiring. The "
-        "candidate supplied the question drafts and answer notes and approved a "
-        "one-time budget increase. "
-        "Agent tests found an early Windows timer wakeup during P6; the candidate "
-        "is not credited with "
-        "catching it. The prior stand-in-only policy blocked real application use "
-        "and was extended with "
-        "explicit permissions. Human grades, feedback and full uncleaned "
-        "conversation exports remain "
-        "candidate work. No model-generated grade is described as human review. "
-        "Missing evidence stays "
-        "not measured; neither synthetic capacity nor stand-in latency is presented "
-        "as Groq performance.",
+        "CANDIDATE INPUT REQUIRED: full actual conversation exports are missing. "
+        "The candidate must identify three prompts, a mistake they caught "
+        "and a decision they overruled "
+        "from those exports. No personal decisions or human review are fabricated.",
     ]
     feedback = Path("candidate/vaani_feedback.txt")
     if feedback.is_file() and feedback.read_text(encoding="utf-8").strip():
         texts[10] = feedback.read_text(encoding="utf-8").strip()
     # Numeric table cells come directly from aggregate.py. Omit optional load rows only for layout.
     selected = {
-        "eval_real",
-        "real_burst6",
         "steady",
         "burst",
         "sustained_overload",
@@ -139,7 +130,9 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "real_smoke",
     }
     for name in ("Table 2a: Latency", "Table 2b: Outcomes"):
-        tables[name]["rows"] = [r for r in tables[name]["rows"] if r[0] in selected]
+        tables[name]["rows"] = [
+            r for r in tables[name]["rows"] if r[0].removesuffix(" (dev)") in selected
+        ]
     return list(zip(headings(), texts, strict=True)), tables
 
 

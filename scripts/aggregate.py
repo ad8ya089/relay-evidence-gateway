@@ -118,6 +118,11 @@ def scenario_metrics(
         else None,
         "token_denominator": len(backed),
         "usage_complete": all(r.usage_complete for r in rows),
+        "provider_calls_total": sum(r.provider_calls or 0 for r in rows),
+        "retries_total": sum(r.retries or 0 for r in rows),
+        "known_tokens_in_total": sum(r.known_tokens_in or 0 for r in rows),
+        "known_tokens_out_total": sum(r.known_tokens_out or 0 for r in rows),
+        "retry_wait_ms_total": sum(r.retry_wait_ms or 0 for r in rows),
         "mean_counted_tokens_per_answer": sum(r.counted_tokens for r in backed) / len(backed)
         if backed and all(r.counted_tokens is not None for r in backed)
         else None,
@@ -304,6 +309,7 @@ def render(
                 show(o["ok"]),
                 show(o["rate_limited"]),
                 show(o["timeout"]),
+                show(o["error"]),
                 show(m["retries_per_request"]),
                 show(m["peak_queue"]),
                 f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
@@ -501,6 +507,17 @@ def submission_tables(
         ]
         for name, e in zip(names, evidence, strict=True)
     ]
+    console = yaml.safe_load(Path("config/p7.yaml").read_text())["limits"]
+    for index, value in [(0, console["rpm"]), (3, console["tpd"])]:
+        t1[index][1:] = [
+            str(value),
+            "Candidate-reported organization console limit.",
+            "unverified; screenshot missing",
+        ]
+    request_id = connectivity.get("provider_request_id")
+    if request_id:
+        for index in [1, 2]:
+            t1[index][2] += f"; request {request_id}"
     t1 += [
         [name, UNKNOWN, UNKNOWN, UNKNOWN]
         for name in [
@@ -514,16 +531,21 @@ def submission_tables(
     diagnostics = {}
     for name in ["eval_real", "real_burst6", *OFFICIAL, "real_smoke"]:
         group = [r for r in rows if r.scenario == name and not r.fixture_only]
+        development = [r for r in rows if r.scenario == "development_" + name]
+        label = name
+        if not group and development:
+            group = development
+            label = name + " (dev)"
         source = "real" if name in {"eval_real", "real_burst6", "real_smoke"} else "stand-in"
         if not group:
             latency.append([name, source] + [UNKNOWN] * 5)
-            outcomes.append([name] + [UNKNOWN] * 7)
+            outcomes.append([name] + [UNKNOWN] * 8)
             continue
         m = scenario_metrics(group, {})
         diagnostics[name] = m
         latency.append(
             [
-                name,
+                label,
                 source,
                 str(m["sent"]),
                 show(
@@ -541,10 +563,11 @@ def submission_tables(
         o = m["outcomes"]
         outcomes.append(
             [
-                name,
+                label,
                 show(o["ok"]),
                 show(o["rate_limited"]),
                 show(o["timeout"]),
+                show(o["error"]),
                 show(m["retries_per_request"]),
                 show(m["peak_queue"]),
                 f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
@@ -613,6 +636,7 @@ def submission_tables(
                 "Succeeded %",
                 "Rate-limited %",
                 "Timed out or given up %",
+                "Error %",
                 "Retries per request",
                 "Peak queue length",
                 "Tokens per answer",

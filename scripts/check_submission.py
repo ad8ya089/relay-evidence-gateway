@@ -117,6 +117,10 @@ def validate(root: Path, *, readiness: bool = True) -> dict[str, object]:
         actual = json.loads((root / "raw/tables.json").read_text())
         if actual != expected:
             errors.append("Tables do not match recomputed CSV/evidence values")
+        for outcome in actual["Table 2b: Outcomes"]["rows"]:
+            if outcome[1] != "not measured":
+                if abs(sum(float(v) for v in outcome[1:5]) - 100) > 0.2:
+                    errors.append("Table 2b outcomes do not reconcile: " + outcome[0])
         errors += pdf_issues(root / "writeup.pdf")
         old_path = root / "raw/p6_results.csv"
         anchor = json.loads((root / "raw/historical_hashes.json").read_text())
@@ -205,6 +209,11 @@ def validate(root: Path, *, readiness: bool = True) -> dict[str, object]:
         "errors": errors,
         "pending": pending,
         "readiness_required": readiness,
+        "evidence_states": {
+            "structure": "PASS" if not errors else "BLOCKED",
+            "candidate_inputs": "CANDIDATE ACTION REQUIRED" if pending else "PASS",
+            "real_evaluation_and_full_calibration": "NOT MEASURED" if pending else "PASS",
+        },
     }
 
 

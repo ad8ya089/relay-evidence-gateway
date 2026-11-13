@@ -50,6 +50,7 @@ def build(root: Path = Path("relay-submission")) -> None:
         shutil.copyfile(path, target)
     events = [
         Path("results/events.jsonl"),
+        Path("results/evidence_completion/experiments/events.jsonl"),
         p7 / "real_smoke/events.jsonl",
         *sorted(p7.glob("standin_evaluation*/eval-*/events.jsonl")),
     ]
@@ -64,7 +65,9 @@ def build(root: Path = Path("relay-submission")) -> None:
     else:
         with (raw / "grades.csv").open("w", newline="", encoding="utf-8") as output:
             csv.DictWriter(output, fieldnames=list(Grade.model_fields)).writeheader()
-    manifests = sorted(p7.glob("**/manifest.json"))
+    manifests = sorted(p7.glob("**/manifest.json")) + sorted(
+        Path("results/evidence_completion/experiments/runs").glob("*/run_manifest.json")
+    )
     (raw / "run_manifest.json").write_text(
         json.dumps(
             {
@@ -92,6 +95,42 @@ def build(root: Path = Path("relay-submission")) -> None:
             shutil.copyfile(p7 / name, raw / name)
     if (p7 / "real_smoke/driver.py").exists():
         shutil.copyfile(p7 / "real_smoke/driver.py", raw / "real_smoke/driver.py")
+    evidence = Path("results/evidence_completion")
+    for name in [
+        "calibration_manifest.json",
+        "budget_review.json",
+        "absence_search.json",
+        "retrieval_review.json",
+        "verification.json",
+        "prompt_token_audit.json",
+        "smoke_diagnosis.md",
+        "reference_review.json",
+        "grading_queue.csv",
+        "grading_manifest.json",
+        "baseline_manifest.json",
+    ]:
+        if (evidence / name).exists():
+            shutil.copyfile(evidence / name, raw / name)
+    for folder in ["reference_pages", "experiments/runs"]:
+        for path in (evidence / folder).rglob("*"):
+            if path.is_file() and path.suffix in {".json", ".jsonl", ".yaml", ".txt", ".log"}:
+                target = raw / "experiment_manifests" / path.relative_to(evidence)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+    for name in ["chatgpt", "codex"]:
+        (root / "conversation_history" / name).mkdir(exist_ok=True)
+    (root / "CANDIDATE_ACTIONS.md").write_text(
+        "# Candidate actions required\n\n"
+        "- Supply actual raw/limits_page_2026-11-13.png; no screenshot bytes were found.\n"
+        "- Supply fresh dated Usage and Limits evidence before any real evaluation.\n"
+        "- Review raw/reference_review.json and grade the 54 corrected stand-in answers; "
+        "then regrade five.\n"
+        "- Supply personal Vaani feedback and full uncleaned ChatGPT/Codex exports.\n"
+        "- Complete safely budgeted real evaluations and sufficient calibration "
+        "when quota permits.\n"
+        "- Upload the completed folder to Drive, verify link access, submit the actual form, "
+        "and retain confirmation.\n"
+    )
     (root / "README.md").write_text(
         "# Relay submission - evidence incomplete\n\n"
         "Run code with uv sync --locked --extra dev; make test.\n"
@@ -113,6 +152,17 @@ def build(root: Path = Path("relay-submission")) -> None:
             "path": str(p.relative_to(root)).replace("\\", "/"),
             "size": p.stat().st_size,
             "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
+            "artifact_type": p.suffix.lstrip(".") or "text",
+            "origin": "source"
+            if "code" in p.relative_to(root).parts
+            else "real"
+            if "real_smoke" in p.parts or "connectivity" in p.name
+            else "stand-in"
+            if "experiment_manifests" in p.parts
+            else "generated",
+            "run_id": next(
+                (part for part in p.parts if part.startswith(("p6-", "eval-", "real-smoke-"))), None
+            ),
             "provenance": "tracked repository source"
             if "code" in p.relative_to(root).parts
             else "recorded/generated local evidence; missing items disclosed",

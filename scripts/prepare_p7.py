@@ -54,6 +54,18 @@ def convert(raw: dict[str, object], key: dict[str, object]) -> ResultRow:
 
 def build(root: Path = Path("results/p7")) -> list[ResultRow]:
     rows = read_csv(Path("results/results.csv"))
+    local = Path("results/evidence_completion/experiments")
+    if (local / "client_rows.jsonl").exists():
+        from scripts.build_results_csv import build as build_load
+
+        rows.extend(
+            build_load(
+                [local / "client_rows.jsonl"],
+                [local / "events.jsonl"],
+                sorted(local.glob("runs/*/run_manifest.json")),
+                [],
+            )
+        )
     keys = load_key()
     for path in sorted(root.glob("standin_evaluation*/eval-*/rows.jsonl")):
         for raw in json_rows([path]):

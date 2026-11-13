@@ -1182,3 +1182,79 @@ readiness validation is blocked on the six stated missing evidence categories. B
 were visually inspected. All 14 protected and 184 historical hashes match; original P6 CSV
 has 84 rows, separate P7 CSV has 193. Staged secret/artifact scan found zero problems.
 The final response records the resulting Git HEAD and remote equality after terminal push.
+
+## Final evidence completion
+
+Baseline HEAD dc56b9915289acec138e93ef46b7af9267e32cd4 was clean and matched remote.
+Before changes, 572 existing files were copied under results/evidence_completion/baseline,
+including both PDFs, historical results/raw runs, manifests, notes and SQLite online backups.
+baseline_manifest.json records sizes/SHA-256; archived files were made read-only and rechecked.
+The original four-page brief was found in Downloads and read. No Limits/Usage screenshot bytes
+were found in the repository or supplied attachments; named-artifact search of user locations
+found the brief but no matching quota evidence. No new real call was dispatched.
+
+Table 1 now includes 30 RPM and 200000 TPD as candidate-reported organization console limits,
+explicitly screenshot-unverified. Header-derived RPD/TPM retain timestamps and provider IDs.
+Table 2b adds Error % without changing CSV columns/status enums. Six regression cases cover
+all-error, mixed outcomes, empty denominators, percentage reconciliation and CSV prefix.
+
+Offline diagnosis found an evidence-retention gap: rejected draft/quote text was not saved.
+Digests and validation checks cannot reconstruct it. An exact cause or exact-case regression
+cannot honestly be claimed. The new pinned-source boundary regression accepts a literal quote,
+rejects an altered quote and rejects a forged chunk ID; it does not claim to reconstruct the
+historical draft. No validation or prompt change was justified. Sealed delivery is unchanged.
+
+scripts.evidence_audit creates reference_review.json, source-page extracts, grading_queue.csv,
+grading_manifest.json, smoke_diagnosis.md, partial calibration_manifest.json and budget_review.json.
+Source qualifiers flagged include Mimi's 512-to-256 projection and the F=G condition on ratio
+loss. Candidate wording/gold is unchanged; every human-review field remains pending. Screening
+for unanswerable facts is bounded to the pinned corpus and is not a proof from missing keywords.
+retrieval_review.json verifies the three saved top-one mismatches against actual chunks and
+includes relevant supporting chunks, without claiming complete top-k misses or final-answer errors.
+
+The previous preflight multiplies retry allowances per pair despite a request-wide retry counter;
+it also omits rejected-draft/feedback growth in repair prompts. The budget review separates the
+four original calls plus one request-wide retry from input estimates and absolute guard limits.
+prompt_token_audit.json reconstructs all 54 initial draft prompts from saved retrieval hits.
+Configured estimates remain estimates, not strict provider input bounds. No complete successful
+real logical answer or real verifier sample exists; p95 is not inferred from one draft sample.
+The existing fail-closed real evaluator/caps remain unchanged. No fresh quota evidence permits
+dispatch, and no standalone smoke/probe/burst is authorized.
+
+Eight new open-loop local runs used actual candidate question text (no gold in prompts), all
+development profile / uncalibrated / fixture_only=true. The new explicit driver uses absolute
+chosen arrival rates, not inferred real capacity. Five required shapes, paired retries and cache
+burst completed; all raw events, manifests, admin changes and client records are preserved under
+results/evidence_completion/experiments/runs. Table rows are labelled (dev); official calibrated
+readiness remains blocked. Minute limits were halved successfully but did not bind at the tested
+rate. Daily tpd was reduced to one locally and later uncached work was rejected. No real quota
+was exhausted. New local rows: 300; combined P7 CSV: 493; original P6 CSV remains 84.
+
+Paired retry runs used identical candidate workload, scheduled arrivals, seed, fault configuration
+and provider limits. Naive succeeded 1/24 versus bounded 9/24; provider calls were 36 versus 46,
+retries 29 versus 4. Thus naive was worse in success rate, not total provider-call count. Peak
+duplicate operations were 2 versus 0. Naive successful latency percentiles are unavailable (n=1).
+Its generator p95 lag was 31 ms versus the configured 20 ms threshold, explicitly disclosed.
+Known usage subtotals/unknown totals remain separate in aggregate.py metrics; no total spend
+is fabricated for interrupted calls. All figures come from CSV/raw records via aggregate.py.
+
+The report and package are regenerated; both PDF pages were visually checked. New raw artifacts,
+calibration manifest, experiment manifests and candidate-action checklist are packaged. Missing:
+actual Limits PNG, fresh quota evidence, candidate grades/reference sign-off, personal Vaani
+feedback, full uncleaned conversation exports, real A/B/C results and complete calibration.
+Drive sharing/form submission/confirmation remain candidate actions, not claimed complete.
+
+Verification: full pytest 496 passed in 97.89 s; make test (local venv Python) 496 passed in
+93.66 s. Ruff passed and format --check reports 190 formatted files. Mypy is not configured.
+Structural submission validation passed with zero errors; readiness remains correctly blocked.
+14 protected hashes, 184 historical hashes and all 572 archive hashes match. Ledger remains two
+historical real calls, 2084 reported tokens, conservative reservation charge 2646. New real run
+IDs: none. Original failed attempts are unchanged. Final remote equality and secret-scan results
+are given in the final response. EVIDENCE_COMPLETION_FILES.txt lists source changes in this task.
+
+Commands run: python -m scripts.development_evidence (local only, refuses an existing output
+directory); python -m scripts.evidence_audit; python -m scripts.prepare_p7; python -m
+scripts.aggregate --submission; python -m scripts.report; python -m scripts.package_submission;
+python -m scripts.check_submission --structural-only; python -m scripts.check_submission;
+python -m pytest -q; make test PYTHON=.venv/Scripts/python; python -m ruff check .;
+python -m ruff format --check . . Do not rerun the experiment driver over its immutable run root.
