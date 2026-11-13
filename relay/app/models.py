@@ -109,6 +109,8 @@ class ValidationResult(StrictModel):
     verifier_diagnostics: list[str] = Field(default_factory=list)
     repairable: bool = False
     failure_reason: str | None = None
+    draft_digest: str | None = None
+    evidence_digest: str | None = None
 
 
 class Citation(StrictModel):
@@ -172,6 +174,7 @@ class Outcome(StrictModel):
     run_id: str
     text: str = ""
     citations: list[Citation] = Field(default_factory=list)
+    claim_citations: dict[int, list[str]] = Field(default_factory=dict)
     state: State
     status: Literal["ok", "error", "timeout", "rate_limited"]
     failure_reason: str | None = None

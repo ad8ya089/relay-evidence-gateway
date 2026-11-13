@@ -61,6 +61,8 @@ async def verify(
         status="pass" if passed else "fail_repairable",
         claims=checks,
         deterministic_passed=True,
+        draft_digest=deterministic.draft_digest,
+        evidence_digest=deterministic.evidence_digest,
         verifier_passed=passed,
         verdicts=response.verdicts,
         repairable=not passed,

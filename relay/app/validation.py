@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from relay.app.models import ClaimCheck, Draft, ValidationResult
 from relay.app.numeric import numeric_errors
 from relay.app.settings import PipelineSettings, pipeline_settings
-from relay.app.text import normalize
+from relay.app.text import digest, normalize
 from relay.retrieval.models import RetrievalHit
 from relay.settings import retrieval_settings
 
@@ -104,6 +104,15 @@ def validate_evidence(
         status="pass" if passed else "fail_final" if irreparable else "fail_repairable",
         claims=outcomes,
         deterministic_passed=passed,
+        draft_digest=digest(draft.model_dump()),
+        evidence_digest=digest(
+            [
+                h.model_dump(
+                    exclude={"score", "bm25_score", "dense_score", "rrf_score", "rerank_score"}
+                )
+                for h in supplied
+            ]
+        ),
         repairable=not passed and not irreparable,
         failure_reason=None
         if passed
