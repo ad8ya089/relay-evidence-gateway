@@ -210,6 +210,10 @@ class Limiter:
         async with self.lock:
             return self._wait(need)
 
+    async def wait_reserved(self, request_id: str) -> float | None:
+        async with self.lock:
+            return self._wait(self.reservations[request_id].need, request_id)
+
     async def reserve(self, request_id: str, need: Need, *, max_wait_ms: float = 0) -> bool:
         async with self.lock:
             if request_id in self.reservations:
