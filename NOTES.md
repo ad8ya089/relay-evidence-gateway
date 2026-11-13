@@ -892,3 +892,34 @@ or orphaned usage may require operator review. Proposed original-document edits
 remain unapplied: replace overwrite-only quota instructions with the conservative
 minimum rule, name the injected central retry owner, and distinguish queue wait,
 handle completion, validated delivery and restart accounting explicitly.
+
+# P6 integration contract (13 November 2026)
+
+Starting main/origin main: 6b8f3e785052a6d908f72ee106045fe48269da14, clean.
+Baseline: 410 unchanged tests passed before edits. Official questions are empty;
+prices are explicitly not measured; free_exact/scaled retain missing account inputs.
+Official experiments must block, not replace those inputs with fixture data.
+
+P5 POST /ask accepts question/text, A/B/C, deadline_ms and cache=false. SSE answer
+contains request_id/text; complete contains status, usage, provider_calls/retries,
+mode/cache/coalescing and citations. A complete status error is an abstention,
+not a successful HTTP-200 answer. JSON 429/503 precedes SSE admission rejection.
+Client timestamps must come from actual HTTP dispatch and answer bytes, separately
+from scheduled lag. HTTPX/httpcore exposes send_request_headers.started tracing;
+pool/connect lag must remain visible instead of silently pacing offered traffic.
+
+P2 events use rid/run/t_ms/ev and per-call call_id; call_start has kind/attempt,
+call_end/call_error carry known or nullable usage and timings. P4 keeps stage_ms
+inside Outcome, but current P5 completion does not expose all stage timings, and
+provider scheduling has no timing span event. P6 will add timing/run-correlation
+telemetry, not change quota, retry, validation or citation semantics. Legacy events
+remain readable and missing spans remain unknown. Client outcome/latency overrides
+server processing completion during joins. Only aggregate.py computes table figures,
+including reusable percentile/capacity/lag summaries called by other CLIs.
+
+P3 admin/profile accepts name or complete Profile and requires quiescence; limits
+accepts positive integer RPM/TPM/RPD/TPD independently; reset requires quiescence.
+admin/state exposes actual profile/provenance, counters and accepted sampling
+decisions. P6 needs a bounded additive sampling audit including rejected decisions.
+Owned child servers use ephemeral ports and owned shutdown; existing listeners
+are never killed. Original documents, evaluation files and prices are protected.

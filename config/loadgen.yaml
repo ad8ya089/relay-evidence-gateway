@@ -1,0 +1,26 @@
+# Assumed local experiment controls, not account measurements.
+status: assumed
+max_requests: 5000
+max_connections: 128
+max_keepalive_connections: 128
+connect_timeout_s: 5
+pool_timeout_s: 10
+max_sse_frame_bytes: 262144
+lag_warning_ms: 20
+health_poll_s: 0.05
+startup_timeout_s: 30
+shutdown_timeout_s: 10
+admin_timeout_s: 5
+quiescence_timeout_s: 15
+min_percentile_samples: 2
+expected_questions: 18
+expected_answerable: 12
+zipf_exponent: 1.2
+capacity:
+  rates_per_minute: [15, 30, 60, 120, 240]
+  duration_s: 20
+  minimum_success: 0.99
+  minimum_samples: 2
+  tiny_rates_per_minute: [60, 120, 240, 480]
+  tiny_duration_s: 2
+  faults: {server_error_prob: 0.0, slow_success_prob: 0.0, verify_fail_prob: 0.0}
