@@ -8,8 +8,12 @@ CALIBRATE_ARGS ?=
 QUESTION ?= Explain encoder-decoder attention
 PIPELINE_ARGS ?= --setting A
 RELAY_ARGS ?=
+LOADGEN_ARGS ?=
+CAPACITY_ARGS ?=
+RESULTS_ARGS ?=
+AGGREGATE_ARGS ?=
 
-.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline pipeline-smoke control-smoke
+.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline results development-smoke pipeline-smoke control-smoke
 ingest:
 	$(PYTHON) -m relay.retrieval.ingest $(INGEST_ARGS)
 retr-eval:
@@ -33,8 +37,22 @@ test:
 check:
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m pytest
-	@echo P1-P5 checks only: full submission checks arrive in P7.
+	@echo P1-P6 checks: human evaluation and final submission remain P7.
 
-# P6-P7 stubs: fail explicitly instead of implying success.
-eval-real capacity scenario scenarios aggregate timeline:
+# Human evaluation remains P7; local load experiments are P6.
+eval-real:
 	$(PYTHON) -m scripts.pending $@
+capacity:
+	$(PYTHON) -m loadgen capacity $(CAPACITY_ARGS)
+scenario:
+	$(PYTHON) -m loadgen run --scenario $(NAME) $(LOADGEN_ARGS)
+scenarios:
+	$(PYTHON) -m loadgen scenarios $(LOADGEN_ARGS)
+development-smoke:
+	$(PYTHON) -m loadgen run --scenario development_smoke $(LOADGEN_ARGS)
+results:
+	$(PYTHON) -m scripts.build_results_csv $(RESULTS_ARGS)
+aggregate:
+	$(PYTHON) -m scripts.aggregate $(AGGREGATE_ARGS)
+timeline:
+	$(PYTHON) -m scripts.timeline $(RID)
