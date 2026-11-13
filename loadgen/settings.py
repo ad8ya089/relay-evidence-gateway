@@ -31,6 +31,7 @@ class CapacitySettings(Model):
 class LoadSettings(Model):
     status: Literal["assumed", "chosen"]
     max_requests: int = Field(gt=0)
+    diagnostic_calls_per_request: int = Field(gt=0)
     max_connections: int = Field(gt=0)
     max_keepalive_connections: int = Field(ge=0)
     connect_timeout_s: float = Field(gt=0)

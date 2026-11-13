@@ -43,8 +43,10 @@ def test_ramp_one_shot_bounds_and_seeded_sampling() -> None:
         offsets(config, 10)
 
 
-def test_official_empty_workload_is_blocked_without_writing_questions() -> None:
+def test_official_empty_workload_is_blocked_without_writing_questions(tmp_path: object) -> None:
     from pathlib import Path
 
+    empty = Path(str(tmp_path)) / "empty.jsonl"
+    empty.write_text("")
     with pytest.raises(PrerequisiteError):
-        questions(Path("eval/questions.jsonl"), load_settings())
+        questions(empty, load_settings())

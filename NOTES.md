@@ -923,3 +923,167 @@ admin/state exposes actual profile/provenance, counters and accepted sampling
 decisions. P6 needs a bounded additive sampling audit including rejected decisions.
 Owned child servers use ephemeral ports and owned shutdown; existing listeners
 are never killed. Original documents, evaluation files and prices are protected.
+
+# P6 implementation and reproduction (13 November 2026)
+
+P6 implements a bounded, precomputed open-loop experiment pipeline. Decimal rate
+integration produces constant, step, burst, ramp and simultaneous schedules before
+any responses exist. Each arrival creates its own HTTP task; only the clock delays
+the dispatch loop. Response completions cannot reduce offered traffic. The slow
+native HTTP test observes four arrivals while all four responses are blocked.
+Uniform and Zipf sampling record the seed, draw, chosen question ID and setting.
+The pool has 128 connections, and the task bound is 5,000; these are explicit local
+engineering choices in config/loadgen.yaml, not provider facts.
+
+The HTTPX trace marks actual request-header dispatch. Scheduled lag and pool/connect
+delay remain separate. The incremental SSE decoder timestamps the bytes belonging
+to answer.text, including a fragment received before its frame is complete.
+Metadata, keepalives, reasoning and provider deltas cannot become first-user-token
+latency. A matching, well-formed terminal completion is mandatory. HTTP 429 maps to
+rate_limited, 503/protocol failures to error, and client patience expiry to timeout.
+Only successful answers retain first_token_ms. The client closes cancelled streams
+and owns/awaits its dispatch and timer tasks. Windows early timer wakeups are checked
+against the injected monotonic clock before cancelling HTTP. The full suite caught
+this edge case; the 25 ms test had observed 15 ms before this correction.
+
+Commands (run at the repository root):
+
+```
+uv sync --locked --extra dev
+loadgen run --scenario development_smoke
+loadgen capacity --fixture-only --tiny
+loadgen run --scenario steady
+loadgen scenarios
+make capacity
+make scenario NAME=steady
+make scenarios
+make results
+make aggregate
+make timeline RID=<recorded-request-id>
+python -m scripts.build_results_csv --validate results/results.csv
+make test
+uv run --locked --extra dev python -m ruff check .
+uv run --locked --extra dev python -m ruff format --check .
+```
+
+The console entry point and python -m loadgen expose the same commands. Makefile
+targets use the dev extra so pytest and Ruff are available in a fresh environment.
+The future guarded command is `loadgen real-burst --n 6 --real --confirm RUN
+--relay-url <local-relay-url> --model <configured-model>` with RELAY_ALLOW_REAL=1.
+It was NOT executed in P6. It accepts only an explicit existing local Relay whose
+state proves a real provider, matching policy/model, durable SQLite guard and
+sufficient remaining hard caps. The load generator never constructs a real provider
+or looks up an API key. P2/P5 guard enforcement still owns actual attempt accounting.
+
+Scenario order is S1 steady, S2 burst, S3 sustained_overload, S4 minute_limit_halved,
+S5 daily_exhausted, S6 standin_burst6_exact, S7a retry_naive, S7b retry_bounded, and
+S8 burst_cache_on. Durations/multipliers are respectively 150s at .5S; 45s/.5S,
+15s/4S,45s/.5S; 90s/1.75S; 120s/.8S with both minute limits halved at 40s;
+100s/.8S with TPD chosen from measured counted tokens/answer and a .6 fraction;
+six at t=0; 90s/.7S for each retry policy; and the S2 shape with cache/Zipf.
+S7 has the same seed and .15 slow probability, factor 8, .03 server error probability.
+Naive retries use the existing P5 policy explicitly. Sampling audit and actual
+execution order are retained; a shared seed does not promise identical concurrent
+fault-to-question assignments. Same-kind overlapping calls are counted separately
+from workflow repair in the CSV audit and table diagnostics.
+
+All nine official prerequisite checks were run. Each recorded a blocked manifest:
+eval/questions.jsonl has zero human questions, free_exact/scaled lack observed
+Limits-page RPM/TPM/RPD/TPD, and official S-based runs have no compatible measured S.
+S6 never substitutes development for exact. No human questions, gold keys or grades
+were generated. The only fixture question is clearly labeled under tests/fixtures.
+No long official scenario was started. S3 tuning, S4/S5 operational observations,
+S7 comparison and S8 cache savings remain unmeasured until those prerequisites exist.
+
+Capacity discovery tests every configured increasing rate. aggregate.py selects the
+highest tested rate with success >=99% and successful p95 total <= deadline, requiring
+the configured sample minimum. It records higher tested points or labels the result
+censored/a lower bound. Generator lag warnings are separate measurement-quality
+warnings and do not silently add a third capacity criterion. Synthetic development
+capacity is S_dev; fixture-only S_dev cannot satisfy an official S prerequisite.
+The compatible report checks profile snapshot, base policy, setting, seed and deadline.
+Tiny points are 60/120/240/480 arrivals/minute for 2s each, not a steady-state capacity
+claim. The first sweep retained 30 client rows and exposed lag warnings. A final
+post-integration sweep and its selected value are recorded in results/capacity_report.json;
+historical reports remain under results/capacity_reports/.
+
+The standalone development smoke at revision 9d64f17 dispatched eight HTTP requests:
+one completed answer and seven queue-full rejections, all eight present in the CSV.
+Its lag p50/p95/p99 was 13.5/20.95/21.79 ms (n=8), with p95 >20 ms explicitly warned.
+The successful request p6-b2983e3627db4b45acdd784eee3adca6-0 took 4625 ms: 15 ms
+waiting, 3891 ms recorded work, zero retrying and 719 ms unattributed. First visible
+content arrived at 4610 ms; 15 ms followed it, so the principal delay was before
+first content. The timeline preserves gaps; its fixture with a real transient retry
+has 15 ms waiting, 35 ms working, 30 ms retrying and 20 ms unknown, with repair
+classified as work. The smoke's one success is insufficient for reported percentiles.
+
+Each run owns separate single-worker Uvicorn children on kernel-selected ephemeral
+ports, fresh SQLite usage/cache stores, health checks and an ownership-checked stop
+endpoint. Cleanup uses only created process handles, never a port/PID search. The
+runner waits for both services to quiesce. Scheduled administration runs independently
+of arrivals, records scheduled/actual monotonic times, status and applied snapshots,
+and marks a failed change incomplete. Profile/reset waits are bounded and preserve
+sampling snapshots before clearing them. No P5 quota/retry/validation policy changed.
+
+Raw client JSONL contains one record per dispatched logical request, including
+rejections, timeouts, cancellations and malformed streams. It retains four monotonic
+timestamps, dispatch UTC, schedule UTC, lag, transport delay, sampling/configuration,
+terminal status and nullable usage/timing fields. Unknown is null, not fabricated zero.
+No answer/question text, paper contents or credentials are stored in client rows.
+P2 EventWriter performs atomic line appends. Historical root events/client rows are
+retained; run-specific copies and manifests are under results/runs/<run_id>/.
+Manifests snapshot actual profiles/provenance/limits, alpha/capacity, policy, scenario,
+seed, chosen IDs/draws, fault decisions, ports, Git commit, admin changes and completion.
+
+The exact first 31 CSV columns are:
+
+```
+request_id,scenario,source,start_time,first_token_ms,total_ms,status,retries,tokens_in,tokens_out,retrieval_setting,answer_grade,run_id,queue_wait_ms,retrieval_ms,provider_ttft_ms,provider_ms,retry_wait_ms,validation_ms,provider_calls,tokens_cached,failure_reason,http_status_last,queue_len_at_arrival,inflight_at_arrival,mode,cache_hit,model,citation_valid,retrieval_hit,deadline_ms
+```
+
+Additional audit columns follow without reordering this prefix. Joins normalize rid
+and request_id and own calls by call_id. Every actual attempt contributes usage,
+including failed calls with known usage, verifier, repair and retries. Unknown usage
+keeps complete totals null and preserves known subtotals. Client latency/outcome is
+authoritative even if a server later logs success. Load answer_grade is always empty;
+future evaluation JSONL is explicit through --eval-runs. The validator rejects bad
+IDs, duplicate rows/call ownership, malformed UTC timestamps, negative/nonfinite
+values, bad enums/settings, contradictory client outcomes and misordered/missing
+columns. A temporary CSV is reread and validated before atomic replacement.
+
+aggregate.py is the sole calculator. Tables use NumPy percentile(method="linear")
+on successful client rows, report actual n and preserve failed elapsed diagnostics.
+Sent counts, scheduled-span offered rates, outcome percentages, retries/sent and
+post-admission max queue depth use their specified denominators. Token averages
+include cached input and validated refusals and exclude cache hits; unknown usage
+is disclosed. Costs sum all attempts and require the same model's dated input,
+cached-input and output prices. Explicit free-allocation evidence permits zero billed
+cost beside list-equivalent cost; absent evidence is not invented. prices.yaml is
+unchanged and empty, so cost remains not measured. Table 1 excludes stand-in probes
+and distinguishes observed headers from verified Limits-page evidence. Table 3
+accepts explicit manual grades only, uses actual graded/class denominators, and
+remains not measured in actual artifacts. Synthetic grades exist only in tests.
+Fixture-only diagnostics are separated from all required official scenario tables.
+
+Tables and CSV were generated from the retained raw data, not manually patched.
+results/ remains ignored by Git; no PDFs/models/indexes/SQLite files or calibration
+artifacts are part of P6 commits. Complete changed/created-file inventory is
+P6_FILES.txt. No original P1-P5 test was edited. The only existing runtime edits
+are additive run correlation, state guard proof, interval timing and sampling audit.
+
+Final verification summaries are recorded below after the integration checks.
+Mypy is not configured. P7 still needs the human dataset/gold, actual account inputs,
+real measurements under explicit future authorization, dated prices, manual grades
+and full official scenario observations. Proposed docs changes remain unapplied:
+document the new timing spans and runner commands, and retain the previously noted
+P5 conservative quota reconciliation/retry ownership clarification.
+
+Final checks: full pytest passed 465 tests in 134.62s; the actual default `make test`
+passed the same 465 tests in 124.00s. This includes all 410 unchanged P1-P5 tests
+and 55 P6 tests. Ruff check passed and Ruff format --check reported 170 files already
+formatted. Mypy is not configured. SHA-256 mismatches: zero of 14 protected files
+(the original 11 project documents, questions, gold and prices). Source/artifact
+scan: 44 files, zero problems. Inventory: 29 created and 15 modified files.
+No real Groq requests, real six-request bursts, real quota probes, API-key lookups
+or automatic answer grading were performed. Git push/remote-HEAD verification and
+the clean-commit measurement repeat are reported with the final P6 commit hash.

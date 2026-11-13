@@ -1,6 +1,5 @@
 """Validated experiment definitions and strict official-run prerequisites."""
 
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +10,8 @@ from eval.retrieval_offline import Question
 from loadgen.arrivals import ArrivalConfig
 from loadgen.settings import LoadSettings, Model
 from loadgen.workload import PrerequisiteError, questions
+from relay.app.text import digest
+from relay.control.settings import load_policy
 from standin.profile import Profile, load_profile
 
 
@@ -19,6 +20,27 @@ class AdminEvent(Model):
     action: Literal["halve_minute_limits", "limits", "profile", "reset", "faults"]
     factor: float | None = Field(default=None, gt=0, lt=1)
     values: dict[str, object] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def factor_required(self) -> "AdminEvent":
+        if self.action == "halve_minute_limits" and self.factor is None:
+            raise ValueError("Minute limit change requires an explicit factor")
+        return self
+
+
+class CapacityEvidence(Model):
+    model_config = {"extra": "ignore", "allow_inf_nan": False}
+    kind: Literal["S"]
+    completion_status: Literal["complete"]
+    fixture_only: Literal[False]
+    profile: Literal["scaled"]
+    profile_snapshot: dict[str, object]
+    base_policy_fingerprint: str
+    setting: Literal["A", "B", "C"]
+    seed: int
+    deadline_ms: int = Field(gt=0)
+    value: float = Field(gt=0)
+    mean_counted_tokens_per_answer: float | None = Field(default=None, gt=0)
 
 
 class Scenario(Model):
@@ -85,13 +107,17 @@ def prerequisite(
     needs_capacity = any(s.multiplier is not None for s in scenario.arrivals.segments)
     if needs_capacity:
         try:
-            capacity = json.loads(capacity_path.read_text(encoding="utf-8"))
+            capacity = CapacityEvidence.model_validate_json(
+                capacity_path.read_text(encoding="utf-8")
+            ).model_dump()
             if (
                 capacity.get("kind") != "S"
                 or capacity.get("fixture_only")
                 or capacity.get("profile") != scenario.profile
                 or capacity.get("setting") != scenario.setting
                 or capacity.get("deadline_ms") != scenario.deadline_ms
+                or capacity.get("seed") != scenario.seed
+                or capacity.get("base_policy_fingerprint") != digest(load_policy().model_dump())
                 or not capacity.get("value")
                 or profile
                 and capacity.get("profile_snapshot") != profile.model_dump()

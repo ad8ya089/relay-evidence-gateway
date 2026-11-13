@@ -122,6 +122,7 @@ async def run(
 
     save()
     client = LoadClient(url, settings, clock)
+    started = clock.monotonic_ns()
     try:
         plans = plan(
             ArrivalConfig(kind="one_shot", count=n),
@@ -133,6 +134,20 @@ async def run(
             maximum=n,
             exponent=settings.zipf_exponent,
         )
+        manifest.update(
+            seed=policy.retry.seed,
+            deadline_ms=policy.deadline_ms,
+            retrieval_setting="C",
+            cache=False,
+            sampling="uniform",
+            question_ids=list(workload),
+            planned_requests=[p.model_dump() for p in plans],
+            scheduled_duration_s=0,
+            offered_arrivals={"kind": "one_shot", "count": n},
+            loadgen_snapshot=settings.model_dump(),
+            profile_provenance="Existing guarded real Relay; account calibration not inferred",
+        )
+        save()
         rows = await dispatch(
             client,
             plans,
@@ -157,4 +172,5 @@ async def run(
         if manifest["completion_status"] != "complete":
             manifest["completion_status"] = "incomplete"
         await client.close()
+        manifest["actual_duration_s"] = (clock.monotonic_ns() - started) / 1e9
         save()

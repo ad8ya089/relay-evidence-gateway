@@ -59,7 +59,14 @@ async def invoke(args: argparse.Namespace) -> int:
             json.dumps(
                 {
                     k: report.get(k)
-                    for k in ("kind", "value", "censored", "completion_status", "reason")
+                    for k in (
+                        "kind",
+                        "value",
+                        "censored",
+                        "completion_status",
+                        "reason",
+                        "generator_warning_at_selected_rate",
+                    )
                 },
                 indent=2,
             )
@@ -95,6 +102,7 @@ async def invoke(args: argparse.Namespace) -> int:
                     "completion_status": report.manifest.completion_status,
                     "reason": report.manifest.reason,
                     "manifest": str(report.manifest_path),
+                    "generator_lag": report.manifest.details.get("generator_lag"),
                 },
                 indent=2,
             )

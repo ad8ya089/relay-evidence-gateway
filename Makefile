@@ -1,4 +1,4 @@
-PYTHON ?= uv run --locked python
+PYTHON ?= uv run --locked --extra dev python
 EVAL_ARGS ?=
 INGEST_ARGS ?= --dense
 PROBE_ARGS ?= --dry-run

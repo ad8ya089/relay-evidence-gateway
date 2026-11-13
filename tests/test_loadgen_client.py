@@ -115,7 +115,10 @@ async def test_slow_http_server_does_not_reduce_arrivals(
     assert "FAKE safe answer" not in (tmp_path / "rows").read_text()
 
 
-@pytest.mark.parametrize("mode", ["incomplete", "wrong_id", "invalid_usage", "rejected"])
+@pytest.mark.parametrize(
+    "mode",
+    ["incomplete", "wrong_id", "invalid_usage", "rejected", "invalid_counted", "invalid_citation"],
+)
 async def test_invalid_protocol_or_rejection_is_never_success(tmp_path: Path, mode: str) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         rid = request.headers["x-request-id"]
@@ -130,6 +133,10 @@ async def test_invalid_protocol_or_rejection_is_never_success(tmp_path: Path, mo
                 if mode == "invalid_usage"
                 else completion(rid)
             )
+        if mode == "invalid_counted":
+            text = text.replace('"counted_tokens": 0', '"counted_tokens": 1')
+        if mode == "invalid_citation":
+            text = text.replace('"citations": []', '"citations": [{"arxiv_id":"FAKE"}]')
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=text)
 
     c = SystemClock()

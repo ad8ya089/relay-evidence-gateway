@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from eval.retrieval_offline import Question
 from loadgen.settings import LoadSettings
 
@@ -13,11 +15,16 @@ class PrerequisiteError(ValueError):
 def questions(
     path: Path, config: LoadSettings, *, fixture_only: bool = False
 ) -> dict[str, Question]:
-    rows = [
-        Question.model_validate_json(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    rows = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if line.strip():
+            try:
+                rows.append(Question.model_validate_json(line))
+            except ValidationError as exc:
+                fields = [str(e["loc"]) + ":" + e["type"] for e in exc.errors(include_input=False)]
+                raise PrerequisiteError(
+                    f"{path.name}:{number}: invalid question fields {fields}"
+                ) from None
     if len({q.qid for q in rows}) != len(rows) or any(
         not q.qid.strip() or not q.question.strip() for q in rows
     ):

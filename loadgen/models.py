@@ -25,13 +25,13 @@ class ClientRecord(Model):
     source: Literal["real", "stand-in"]
     question_id: str
     seed: int
-    sampling: str
-    sample_draw: float
+    sampling: Literal["uniform", "zipf"]
+    sample_draw: float = Field(ge=0, lt=1)
     fixture_only: bool
     scheduled_arrival_monotonic: int = Field(ge=0)
     task_dispatch_monotonic: int = Field(ge=0)
     actual_send_monotonic: int = Field(ge=0)
-    first_answer_byte_monotonic: int | None = None
+    first_answer_byte_monotonic: int | None = Field(default=None, ge=0)
     completion_monotonic: int = Field(ge=0)
     scheduled_arrival_utc: str
     actual_send_utc: str

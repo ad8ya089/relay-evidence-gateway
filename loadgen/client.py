@@ -1,9 +1,10 @@
 """Actual HTTP open-loop dispatch; no provider calls, retries or answer logging."""
 
 import asyncio
+import json
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,6 +13,7 @@ from loadgen.arrivals import PlannedRequest
 from loadgen.models import ClientRecord, RunContext
 from loadgen.settings import LoadSettings
 from loadgen.sse import ProtocolError, SSEDecoder
+from relay.app.models import Citation
 from relay.obs.clock import Clock
 from relay.obs.events import EventContext, EventWriter
 from relay.providers.groq import is_loopback_url
@@ -39,6 +41,14 @@ class ObservedUsage(BaseModel):
             and self.tokens_cached > self.tokens_in
         ):
             raise ValueError("Cached input is not additional input")
+        if (
+            all(
+                v is not None
+                for v in (self.tokens_in, self.tokens_out, self.tokens_cached, self.counted_tokens)
+            )
+            and self.counted_tokens != self.tokens_in - self.tokens_cached + self.tokens_out
+        ):
+            raise ValueError("Counted usage contradicts cached-input accounting")
         return self
 
 
@@ -51,7 +61,7 @@ class Completion(BaseModel):
     mode: str
     cache_hit: bool
     coalesced: bool
-    citations: list[dict[str, object]]
+    citations: list[Citation]
 
 
 class LoadClient:
@@ -113,17 +123,40 @@ class LoadClient:
         status, failure = "error", "incomplete_stream"
         http_status = None
         cancelled = False
-        scope = asyncio.timeout(self.config.pool_timeout_s)
+        scope = asyncio.timeout(None)
+        deadline_ns = task_ns + int(self.config.pool_timeout_s * 1e9)
+        changed = asyncio.Event()
+        timer: asyncio.Task[None] | None = None
+
+        def set_deadline(value: int) -> None:
+            nonlocal deadline_ns
+            deadline_ns = value
+            changed.set()
+
+        async def expire() -> None:
+            # Windows event-loop timers may wake early. Only this clock decides expiry;
+            # early wakeups cancel an Event wait, never the in-flight HTTP stream.
+            while True:
+                remaining = (deadline_ns - clock.monotonic_ns()) / 1e9
+                if remaining <= 0:
+                    scope.reschedule(asyncio.get_running_loop().time())
+                    return
+                changed.clear()
+                try:
+                    await asyncio.wait_for(changed.wait(), remaining)
+                except TimeoutError:
+                    pass
 
         async def trace(name: str, info: dict[str, object]) -> None:
             nonlocal actual_ns, actual_utc
             if name.endswith("send_request_headers.started") and actual_ns is None:
                 actual_ns = clock.monotonic_ns()
                 actual_utc = clock.utc_now().astimezone(UTC).isoformat(timespec="milliseconds")
-                scope.reschedule(asyncio.get_running_loop().time() + context.deadline_ms / 1000)
+                set_deadline(actual_ns + context.deadline_ms * 1_000_000)
 
         try:
             async with scope:
+                timer = asyncio.create_task(expire())
                 async with self.http.stream(
                     "POST",
                     "ask",
@@ -140,16 +173,22 @@ class LoadClient:
                     if actual_ns is None:
                         # Explicitly marked estimate for non-network injected test transports.
                         actual_ns = task_ns
-                        scope.reschedule(
-                            asyncio.get_running_loop().time() + context.deadline_ms / 1000
-                        )
+                        set_deadline(actual_ns + context.deadline_ms * 1_000_000)
                     if response.status_code != 200:
                         status = "rate_limited" if response.status_code == 429 else "error"
                         failure = f"http_{response.status_code}"
-                        body = await response.aread()
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            body.extend(chunk)
+                            if len(body) > self.config.max_sse_frame_bytes:
+                                break
                         try:
-                            reason = response.json().get("reason")
-                            if isinstance(reason, str) and re.fullmatch(r"[a-z0-9_]+", reason):
+                            reason = json.loads(body).get("reason")
+                            if (
+                                isinstance(reason, str)
+                                and len(reason) <= 500
+                                and re.fullmatch(r"[a-z0-9_]+", reason)
+                            ):
                                 failure = reason
                         except (ValueError, AttributeError):
                             pass
@@ -197,6 +236,7 @@ class LoadClient:
                                     )
                                     metrics.update(parsed.usage.model_dump(exclude={"complete"}))
                                     metrics["usage_complete"] = parsed.usage.complete
+                                    metrics["citation_valid"] = True if parsed.citations else None
                                     status = frame.data["status"]
                                     failure = None if status == "ok" else "validated_abstention"
                                     complete = True
@@ -219,6 +259,11 @@ class LoadClient:
             status, failure = "error", "transport_" + type(exc).__name__
         except Exception as exc:
             status, failure = "error", "client_" + type(exc).__name__
+        finally:
+            if timer:
+                if not timer.done():
+                    timer.cancel()
+                await asyncio.gather(timer, return_exceptions=True)
         finished = clock.monotonic_ns()
         wire_observed = actual_utc is not None
         actual_ns = actual_ns if actual_ns is not None else task_ns
@@ -277,11 +322,13 @@ async def dispatch(
     writers: list[EventWriter],
     *,
     sleep: Sleep = asyncio.sleep,
+    start_ns: int | None = None,
+    start_utc: datetime | None = None,
 ) -> list[ClientRecord]:
     if len(plans) > client.config.max_requests:
         raise ValueError("Bounded task count exceeded")
-    start = client.clock.monotonic_ns()
-    utc = client.clock.utc_now().astimezone(UTC)
+    start = client.clock.monotonic_ns() if start_ns is None else start_ns
+    utc = (start_utc or client.clock.utc_now()).astimezone(UTC)
     tasks = []
     try:
         for item in plans:

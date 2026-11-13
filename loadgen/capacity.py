@@ -9,6 +9,8 @@ from loadgen.runner import commit_id, execute
 from loadgen.scenarios import Scenario, catalog
 from loadgen.settings import load_settings
 from loadgen.workload import questions
+from relay.app.text import digest
+from relay.control.settings import load_policy
 from relay.obs.clock import SystemClock
 from scripts.aggregate import capacity_point, capacity_result
 from scripts.build_results_csv import build
@@ -52,6 +54,11 @@ async def discover(
             deadline_ms=template.deadline_ms,
             setting=template.setting,
             capacity_settings=settings.capacity.model_dump(),
+            base_policy_fingerprint=digest(load_policy().model_dump()),
+            definition=(
+                "highest tested rate with success >=99% and p95 total <= deadline; "
+                "lag warnings are reported separately"
+            ),
         )
         questions(template.workload, settings, fixture_only=fixture_only)
         rates = (
@@ -105,9 +112,13 @@ async def discover(
             chosen["metrics"]["mean_counted_tokens_per_answer"] if chosen else None
         )
         report["token_estimate_basis"] = (
+            # Generator lag is a separate measurement-quality warning, not a new S criterion.
             "provider-backed successful logical requests at selected passing rate; not calibration"
         )
         report["completion_status"] = "complete"
+        report["generator_warning_at_selected_rate"] = (
+            chosen["generator_warning"] if chosen else None
+        )
     except (ValueError, OSError, RuntimeError) as exc:
         report["completion_status"], report["reason"] = (
             "blocked" if not report["points"] else "incomplete",

@@ -21,7 +21,8 @@ AUDIT = (
     "usage_complete counted_tokens known_tokens_in known_tokens_out known_tokens_cached "
     "known_counted_tokens scheduled_arrival_monotonic actual_send_monotonic completion_monotonic "
     "generator_lag_ms transport_wait_ms scheduled_arrival_utc question_id answerable record_kind "
-    "fixture_only terminal_complete client_status accounting_diagnostics queue_high_water"
+    "fixture_only terminal_complete client_status accounting_diagnostics queue_high_water "
+    "peak_duplicate_provider_operations free_allocation server_cleanup_observed arrival_kind"
 ).split()
 COLUMNS = REQUIRED + EXTRA + AUDIT
 
@@ -88,13 +89,29 @@ class ResultRow(Model):
     client_status: str | None = None
     accounting_diagnostics: list[str] = Field(default_factory=list)
     queue_high_water: int | None = Field(default=None, ge=0)
+    peak_duplicate_provider_operations: int | None = Field(default=None, ge=0)
+    free_allocation: bool | None = None
+    server_cleanup_observed: bool | None = None
+    arrival_kind: Literal["constant", "step", "burst", "ramp", "one_shot"] | None = None
 
     _timestamp = field_validator("start_time")(timestamp)
 
     @model_validator(mode="after")
     def consistent(self) -> "ResultRow":
-        if not self.request_id.strip() or self.client_status and self.client_status != self.status:
+        if (
+            any(not value.strip() for value in (self.request_id, self.run_id, self.scenario))
+            or self.client_status
+            and self.client_status != self.status
+        ):
             raise ValueError("Missing identifier or contradictory client outcome")
+        if self.scheduled_arrival_utc is not None:
+            timestamp(self.scheduled_arrival_utc)
+        if (
+            self.actual_send_monotonic is not None
+            and self.completion_monotonic is not None
+            and self.completion_monotonic < self.actual_send_monotonic
+        ):
+            raise ValueError("Completion precedes dispatch")
         if self.record_kind == "load":
             if self.answer_grade:
                 raise ValueError("Load-test grades must remain empty")

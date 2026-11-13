@@ -3,6 +3,7 @@
 import argparse
 import json
 from collections import defaultdict
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -48,13 +49,26 @@ def cost(rows: list[ResultRow], prices: dict[str, object]) -> dict[str, object]:
         missing = [key for key in required if price.get(key) is None]
         if missing:
             return {"value": None, "reason": f"{row.model}: missing {', '.join(missing)}", "n": n}
+        try:
+            date.fromisoformat(str(price["date"]))
+            if any(not np.isfinite(float(price[k])) or float(price[k]) < 0 for k in required[1:]):
+                raise ValueError("Invalid price")
+        except (ValueError, TypeError):
+            return {"value": None, "reason": "invalid price/date", "n": n}
         dates.add(str(price["date"]))
         total += (
             (row.tokens_in - row.tokens_cached) * float(price["input_per_million"])
             + row.tokens_cached * float(price["cached_input_per_million"])
             + row.tokens_out * float(price["output_per_million"])
         ) / 1_000_000
-    return {"value": total * 1000 / n if n else None, "n": n, "price_dates": sorted(dates)}
+    return {
+        "value": total * 1000 / n if n else None,
+        "n": n,
+        "price_dates": sorted(dates),
+        "billed": 0.0
+        if rows and all(r.source == "real" and r.free_allocation is True for r in rows)
+        else None,
+    }
 
 
 def scenario_metrics(
@@ -74,11 +88,16 @@ def scenario_metrics(
     tokens_known = all(r.usage_complete for r in backed)
     queue = [r.queue_len_at_arrival for r in rows if r.queue_len_at_arrival is not None]
     high = [r.queue_high_water for r in rows if r.queue_high_water is not None]
+    duplicate = [
+        r.peak_duplicate_provider_operations
+        for r in rows
+        if r.peak_duplicate_provider_operations is not None
+    ]
     return {
         "sent": sent,
         "duration_s": duration,
         "offered_per_minute": sent * 60 / span if span else None,
-        "one_shot": bool(sent and span == 0),
+        "one_shot": bool(sent and all(r.arrival_kind == "one_shot" for r in rows)),
         "first_token_ms": percentiles(
             [r.first_token_ms for r in ok if r.first_token_ms is not None], minimum
         ),
@@ -93,6 +112,7 @@ def scenario_metrics(
         else None,
         "peak_queue": max(queue) if queue else None,
         "queue_high_water": max(high) if high else None,
+        "peak_duplicate_provider_operations": max(duplicate) if duplicate else None,
         "tokens_per_answer": sum(r.tokens_in + r.tokens_out for r in backed) / len(backed)
         if backed and tokens_known
         else None,
@@ -126,9 +146,13 @@ def capacity_point(
     p95 = metrics["total_ms"]["p95"]
     if p95 is None or p95 > deadline_ms:
         reasons.append("p95 unavailable or exceeds deadline")
-    if metrics["lag_ms"]["rate_not_maintained"]:
-        reasons.append("generator did not maintain offered rate")
-    return {"rate_per_minute": rate, "passes": not reasons, "reasons": reasons, "metrics": metrics}
+    return {
+        "rate_per_minute": rate,
+        "passes": not reasons,
+        "reasons": reasons,
+        "generator_warning": metrics["lag_ms"]["rate_not_maintained"],
+        "metrics": metrics,
+    }
 
 
 def capacity_result(points: list[dict[str, object]]) -> dict[str, object]:
@@ -271,6 +295,8 @@ def render(
         o = m["outcomes"]
         c = m["cost_per_1000"]
         displayed_cost = UNKNOWN if c["value"] is None else f"{c['value']:.4f} list-equiv"
+        if c["value"] is not None and c.get("billed") == 0:
+            displayed_cost = f"0.00 billed / {c['value']:.4f} list-equiv"
         # A free-tier billing claim requires explicit allocation evidence outside this CSV.
         outcomes.append(
             [

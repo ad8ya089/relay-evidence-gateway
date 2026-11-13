@@ -1,6 +1,7 @@
 # Assumed local experiment controls, not account measurements.
 status: assumed
 max_requests: 5000
+diagnostic_calls_per_request: 16  # Chosen bounded audit allowance; not model calibration.
 max_connections: 128
 max_keepalive_connections: 128
 connect_timeout_s: 5

@@ -219,7 +219,9 @@ async def execute(
     admin_writer = EventWriter(directory / "admin_events.jsonl", clock=clock)
     try:
         workload, original, capacity = prerequisite(scenario, settings, capacity_path)
-        profile = configured_profile(original, scenario, settings.max_requests * 16)
+        profile = configured_profile(
+            original, scenario, settings.max_requests * settings.diagnostic_calls_per_request
+        )
         plans = plan(
             scenario.arrivals,
             list(workload),
@@ -297,6 +299,11 @@ async def execute(
             before, server = await quiescent(http, standin, relay, clock, settings)
             manifest.details.update(initial_standin=before, initial_relay=server)
             base = clock.monotonic_ns()
+            base_utc = clock.utc_now()
+            manifest.details.update(
+                arrival_base_monotonic=base,
+                arrival_base_utc=base_utc.isoformat(timespec="milliseconds"),
+            )
             admin = asyncio.create_task(
                 administer(
                     scenario.admin_events,
@@ -327,6 +334,8 @@ async def execute(
                     EventWriter(directory / "client_rows.jsonl", clock=clock),
                     EventWriter(root / "client_rows.jsonl", clock=clock),
                 ],
+                start_ns=base,
+                start_utc=base_utc,
             )
             # Keep the configured run interval, even if the last response finishes early.
             while (remaining := base + int(scenario.duration_s * 1e9) - clock.monotonic_ns()) > 0:
@@ -349,7 +358,15 @@ async def execute(
         manifest.completion_status = "complete"
     except PrerequisiteError as exc:
         manifest.completion_status, manifest.reason = "blocked", str(exc)
-    except (ValueError, OSError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
+    except (
+        ValueError,
+        OSError,
+        RuntimeError,
+        TimeoutError,
+        KeyError,
+        TypeError,
+        httpx.HTTPError,
+    ) as exc:
         manifest.completion_status, manifest.reason = (
             "incomplete",
             f"{type(exc).__name__}: {str(exc)[:500]}",
@@ -371,6 +388,8 @@ async def execute(
             (directory / "events.jsonl").write_text(
                 "".join(json.dumps(e) + "\n" for e in selected), encoding="utf-8"
             )
+        if (directory / "admin_events.jsonl").exists():
+            manifest.details["admin_event_records"] = json_rows([directory / "admin_events.jsonl"])
         manifest.details["actual_duration_s"] = (clock.monotonic_ns() - started) / 1e9
         manifest.details["owned_children_stopped"] = all(
             c.process is None or c.process.returncode is not None for c in children

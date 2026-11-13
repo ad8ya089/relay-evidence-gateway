@@ -58,6 +58,8 @@ def call_metrics(rid: str, events: list[dict[str, object]]) -> dict[str, object]
     elapsed = []
     retries = 0
     diagnostics = []
+    operations: dict[str, list[tuple[float, int]]] = defaultdict(list)
+    overlap_known = True
     for cid, records in calls.items():
         starts = [e for e in records if e["ev"] == "call_start"]
         ends = [e for e in records if e["ev"] in {"call_end", "call_error"}]
@@ -70,6 +72,19 @@ def call_metrics(rid: str, events: list[dict[str, object]]) -> dict[str, object]
             and end["safe_context"].get("dispatched") is False
         ):
             continue
+        if (
+            starts
+            and end
+            and isinstance(starts[0].get("t_ms"), (int, float))
+            and isinstance(end.get("t_ms"), (int, float))
+        ):
+            if end["t_ms"] < starts[0]["t_ms"]:
+                raise ResultsError(f"{rid}: provider completion precedes call start")
+            operations[str(starts[0].get("kind"))].extend(
+                [(starts[0]["t_ms"], 1), (end["t_ms"], -1)]
+            )
+        else:
+            overlap_known = False
         if not starts and not end:
             continue
         if not starts or not end:
@@ -79,6 +94,10 @@ def call_metrics(rid: str, events: list[dict[str, object]]) -> dict[str, object]
         except ValueError:
             raise ResultsError(f"{rid}: malformed provider usage for {cid}") from None
         elapsed.append(end.get("total_ms") if end else None)
+        if elapsed[-1] is not None and (
+            not isinstance(elapsed[-1], (float, int)) or elapsed[-1] < 0
+        ):
+            raise ResultsError(f"{rid}: invalid provider duration for {cid}")
         retries += bool(starts and starts[0].get("attempt", 1) > 1)
     if not usages:
         return {}
@@ -88,6 +107,13 @@ def call_metrics(rid: str, events: list[dict[str, object]]) -> dict[str, object]
         "retries": retries,
         "accounting_diagnostics": diagnostics,
     }
+    peak_duplicate = 0
+    for boundaries in operations.values():
+        active = 0
+        for _, increment in sorted(boundaries):
+            active += increment
+            peak_duplicate = max(peak_duplicate, active - 1)
+    result["peak_duplicate_provider_operations"] = peak_duplicate if overlap_known else None
     for field in ("tokens_in", "tokens_out", "tokens_cached", "counted_tokens"):
         values = [getattr(u, field) for u in usages]
         result[field] = sum(values) if all(v is not None for v in values) else None
@@ -115,6 +141,8 @@ def joined(
         for key in ("run_id", "scenario", "source", "model"):
             if manifest.get(key) is not None and manifest[key] != data[key]:
                 raise ResultsError(f"{client.request_id}: manifest {key} mismatch")
+        data["server_cleanup_observed"] = manifest.get("server_cleanup_observed")
+        data["arrival_kind"] = manifest.get("offered_arrivals", {}).get("kind")
     metrics = call_metrics(client.request_id, events)
     if metrics:
         if client.provider_calls is not None and client.provider_calls != metrics["provider_calls"]:
