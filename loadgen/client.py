@@ -287,8 +287,9 @@ async def dispatch(
         for item in plans:
             scheduled = start + item.offset_ns
             remaining = (scheduled - client.clock.monotonic_ns()) / 1e9
-            if remaining > 0:
+            while remaining > 0:
                 await sleep(remaining)
+                remaining = (scheduled - client.clock.monotonic_ns()) / 1e9
             stamp = (utc + timedelta(microseconds=item.offset_ns / 1000)).isoformat(
                 timespec="milliseconds"
             )

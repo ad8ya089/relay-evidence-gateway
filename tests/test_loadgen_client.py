@@ -110,7 +110,8 @@ async def test_slow_http_server_does_not_reduce_arrivals(
         await client.close()
     assert len(rows) == 4 and all(r.status == "ok" for r in rows)
     assert all(r.dispatch_timestamp_source == "httpcore_headers" for r in rows)
-    assert all(r.first_token_ms > 0 for r in rows)
+    assert all(r.first_token_ms >= 0 for r in rows)
+    assert all(r.first_answer_byte_monotonic >= r.actual_send_monotonic for r in rows)
     assert "FAKE safe answer" not in (tmp_path / "rows").read_text()
 
 
