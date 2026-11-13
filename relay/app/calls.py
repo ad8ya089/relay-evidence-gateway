@@ -42,7 +42,7 @@ class RequestCalls(BaseModel):
     deadline_ns: int
     attempts: list[CallAttempt] = Field(default_factory=list)
     retries: int = 0
-    retry_wait_ms: float = 0
+    retry_wait_ms: float = 0.0
 
     def totals(self) -> TokenTotals:
         calls = [c for c in self.attempts if c.dispatched]

@@ -15,6 +15,7 @@ class PipelineSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
     status: Literal["assumed", "chosen"]
     default_setting: Setting
+    evidence_limit: int | None = Field(default=None, ge=1)
     deadline_ms: int = Field(gt=0)
     max_question_chars: int = Field(gt=0)
     max_claim_chars: int = Field(gt=0)

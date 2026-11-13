@@ -55,6 +55,8 @@ def for_request(
     *,
     cached: bool = False,
     coalesced: bool = False,
+    now_ns: int | None = None,
+    mode: str | None = None,
 ) -> Outcome:
     if not approved(source):
         raise DeliveryError("Cannot copy an unapproved outcome")
@@ -63,6 +65,7 @@ def for_request(
     result.arrival_ns, result.deadline_ns = arrival_ns, deadline_ns
     result.first_user_token_at = result.first_token_ms = None
     result.cache_hit, result.coalesced = cached, coalesced
+    result.computation_request_id = source.computation_request_id or source.request_id
     if cached or coalesced:
         result.calls = []
         result.usage = TokenTotals()
@@ -75,6 +78,9 @@ def for_request(
         if cached:
             result.state = State.CACHE_HIT
             result.states = [State.ARRIVED, State.CACHE_HIT]
+    result.total_ms = max(0, ((now_ns if now_ns is not None else arrival_ns) - arrival_ns) / 1e6)
+    if mode is not None:
+        result.mode = mode
     _authorize(result)
     return result
 
@@ -142,7 +148,7 @@ class AnswerCache:
                 self.entries.popitem(last=False)
             return True
 
-    async def get(self, key: str) -> Outcome | None:
+    async def get(self, key: str, *, count: bool = True) -> Outcome | None:
         if not self.config.enabled:
             return None
         async with self.lock:
@@ -172,13 +178,13 @@ class AnswerCache:
                 or not cacheable(entry.outcome)
             ):
                 self.entries.pop(key, None)
-                self.misses += 1
+                self.misses += int(count)
                 return None
             self.entries[key] = entry
             self.entries.move_to_end(key)
             while len(self.entries) > self.config.max_entries:
                 self.entries.popitem(last=False)
-            self.hits += 1
+            self.hits += int(count)
             return entry.outcome.model_copy(deep=True)
 
     async def snapshot(self) -> dict[str, int | bool]:

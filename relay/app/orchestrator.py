@@ -148,6 +148,7 @@ class Orchestrator:
                 a.kind == "repair" and a.dispatched and not a.is_retry for a in attempts
             ),
             retries=run.calls.retries,
+            retry_wait_ms=run.calls.retry_wait_ms,
             usage=run.calls.totals(),
             tool_retries=run.tool_retries,
             calls=attempts,
@@ -214,6 +215,7 @@ class Orchestrator:
                 deadline_ns=run.calls.deadline_ns,
                 context=run.context,
                 allow_retry=run.tool_retries < self.config.tool_retry_max,
+                top_k=self.config.evidence_limit,
             )
         finally:
             self._timing(run, "retrieval", started)
@@ -230,6 +232,16 @@ class Orchestrator:
         self._check(run)
         if result.status in {"error", "timeout"}:
             raise ToolStageError(result)
+        if self.config.evidence_limit and run.retrieval.hits:
+            hits = run.retrieval.hits
+            ordered = (
+                [hits[0]]
+                + [h for h in hits[1:] if h.neighbour]
+                + [h for h in hits[1:] if not h.neighbour]
+            )
+            run.retrieval = run.retrieval.model_copy(
+                update={"hits": ordered[: self.config.evidence_limit]}
+            )
         return run.retrieval
 
     def _gate(self, run: Run) -> str:
@@ -453,8 +465,11 @@ class Orchestrator:
         setting: Setting | None = None,
         request_id: str | None = None,
         deadline_ms: int | None = None,
+        *,
+        arrival_ns: int | None = None,
+        emit_arrived: bool = True,
     ) -> Outcome:
-        arrival = self.clock.monotonic_ns()
+        arrival = self.clock.monotonic_ns() if arrival_ns is None else arrival_ns
         data = question.model_dump() if isinstance(question, Question) else {"text": question}
         for field, value in (
             ("setting", setting),
@@ -489,7 +504,8 @@ class Orchestrator:
             context=EventContext(rid=parsed.request_id, run=self.run_id, arrival_ns=arrival),
         )
         try:
-            self._emit(run, "arrived", setting=parsed.setting or self.config.default_setting)
+            if emit_arrived:
+                self._emit(run, "arrived", setting=parsed.setting or self.config.default_setting)
             if invalid:
                 return self._complete(run, State.FAILED, "error", reason="invalid_request")
             return await self._workflow(run)

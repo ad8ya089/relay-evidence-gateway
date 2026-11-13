@@ -177,6 +177,10 @@ class Outcome(StrictModel):
     request_id: str
     cache_hit: bool = False
     coalesced: bool = False
+    mode: Literal["normal", "pressure", "exhausted"] = "normal"
+    queue_wait_ms: float = Field(default=0.0, ge=0)
+    retry_wait_ms: float = Field(default=0.0, ge=0)
+    computation_request_id: str | None = None
     run_id: str
     text: str = ""
     citations: list[Citation] = Field(default_factory=list)
