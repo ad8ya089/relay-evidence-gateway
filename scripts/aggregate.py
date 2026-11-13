@@ -184,6 +184,37 @@ def show(value: object) -> str:
     return UNKNOWN if value is None else f"{value:.1f}" if isinstance(value, float) else str(value)
 
 
+def evaluation_metrics(rows: list[ResultRow], minimum: int = 2) -> dict[str, dict[str, object]]:
+    """Only explicit human grades enter accuracy denominators; never create grades."""
+    result = {}
+    for setting in ("A", "B", "C"):
+        graded = [
+            r
+            for r in rows
+            if r.record_kind == "eval" and r.retrieval_setting == setting and r.answer_grade
+        ]
+        n = len(graded)
+        unanswerable = [r for r in graded if r.answerable is False]
+        known_classes = all(r.answerable is not None for r in graded)
+        result[setting] = {
+            "asked": n,
+            "correct_pct": sum(r.answer_grade == "correct" for r in graded) * 100 / n
+            if n
+            else None,
+            "wrong_pct": sum(r.answer_grade == "wrong" for r in graded) * 100 / n if n else None,
+            "unanswerable_n": len(unanswerable) if known_classes else None,
+            "refused_correctly_pct": sum(
+                r.answer_grade == "refused_correctly" for r in unanswerable
+            )
+            * 100
+            / len(unanswerable)
+            if known_classes and unanswerable
+            else None,
+            "performance": scenario_metrics(graded, {}, minimum=minimum),
+        }
+    return result
+
+
 def distribution(value: dict[str, object]) -> str:
     return "/".join(show(value[f"p{p}"]) for p in (50, 95, 99)) + f" (n={value['n']})"
 
@@ -286,7 +317,37 @@ def render(
         "billing is not inferred without allocation evidence. "
         "Percentiles need the configured minimum sample count; p99 with n<100 is unstable.\n"
     )
-    text += "\nTable 3 — manual retrieval evaluation\n\nnot measured\n"
+    evaluation = evaluation_metrics([r for r in rows if not r.fixture_only], minimum)
+    diagnostics["evaluation"] = evaluation
+    text += "\nTable 3 — manual retrieval evaluation\n\n"
+    evaluation_rows = []
+    for setting, e in evaluation.items():
+        m = e["performance"]
+        evaluation_rows.append(
+            [
+                setting,
+                str(e["asked"]),
+                show(e["correct_pct"]),
+                show(e["wrong_pct"]),
+                f"{show(e['refused_correctly_pct'])} (n={show(e['unanswerable_n'])})",
+                f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
+                distribution(m["first_token_ms"]),
+                distribution(m["total_ms"]),
+            ]
+        )
+    text += table(
+        [
+            "Setting",
+            "Graded questions",
+            "Correct/cited %",
+            "Wrong %",
+            "Correct refusal %",
+            "Tokens/answer",
+            "First ms p50/p95/p99",
+            "Total ms p50/p95/p99",
+        ],
+        evaluation_rows,
+    )
     text += "\nFixture-only development diagnostics (excluded from official tables)\n\n"
     text += table(["Scenario/source/run", "Sent", "Total ms p50/p95/p99", "Outcome %"], development)
     return text + "\n", diagnostics
