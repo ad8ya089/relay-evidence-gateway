@@ -87,7 +87,7 @@ class ServerSettings(PolicyModel):
 
 
 class Policy(PolicyModel):
-    provider: Literal["standin"]
+    provider: Literal["standin", "groq"]
     status: Literal["chosen", "assumed"]
     deadline_ms: int = Field(gt=0)
     max_queue_wait_ms: int = Field(ge=0)

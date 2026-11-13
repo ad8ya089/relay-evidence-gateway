@@ -5,6 +5,7 @@ import asyncio
 import ipaddress
 import json
 import math
+import os
 import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -32,11 +33,13 @@ from relay.control.scheduler import ProviderScheduler
 from relay.control.settings import load_policy
 from relay.obs.clock import SystemClock
 from relay.obs.events import EventContext, EventWriteError, EventWriter
+from relay.providers.factory import application_policy, selection
 from relay.providers.groq import GroqCompatibleProvider, is_loopback_url
+from relay.providers.guard import RealCallDenied, RealCallGuard
 from relay.providers.settings import provider_settings
 from relay.retrieval.models import CorpusManifest
 from relay.retrieval.search import RetrievalEngine
-from relay.settings import PaperId
+from relay.settings import PaperId, SafetySettings
 from relay.tools.executor import ToolExecutor
 from standin.profile import load_profile
 
@@ -257,22 +260,26 @@ def create_local_app(
     allow_unsafe_naive: bool = False,
     run_id: str = "p5-local",
     model: str | None = None,
+    real: bool = False,
 ) -> FastAPI:
-    policy = load_policy(policy_path)
+    policy = application_policy(policy_path, real=real)
     if no_cache:
         policy = type(policy).model_validate(
             policy.model_dump()
             | {"cache": policy.cache.model_dump() | {"enabled": False, "singleflight": False}}
         )
-    url = base_url or policy.server.standin_base_url
-    if not is_loopback_url(url):
-        raise ValueError("P5 local service accepts loopback stand-ins only")
+    url, key = selection(policy, real=real, base_url=base_url)
+    is_real = not is_loopback_url(url)
     if policy.retry.policy == "naive_s7a" and not allow_unsafe_naive:
         raise ValueError("Unsafe naive policy requires --allow-unsafe-naive")
     manifest = CorpusManifest.model_validate_json(
         Path("data/corpus_manifest.json").read_text(encoding="utf-8")
     )
-    model = model or load_profile("development").model
+    model = model or (
+        os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
+        if is_real
+        else load_profile("development").model
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -281,18 +288,26 @@ def create_local_app(
         cache = AnswerCache(cache_path, policy.cache, clock)
         flight = SingleFlight(policy.cache, clock)
         with Ledger(ledger_path, clock=clock) as ledger:
+            guard = (
+                RealCallGuard(SafetySettings(), argv=["--real"], ledger=ledger) if is_real else None
+            )
             async with GroqCompatibleProvider(
                 url,
-                None,
+                key,
                 model,
                 ledger=ledger,
                 events=events,
                 clock=clock,
+                guard=guard,
                 settings=provider_settings().model_copy(
-                    update={"error_rules": policy.standin_error_rules}
+                    update={
+                        "error_rules": provider_settings().error_rules
+                        if is_real
+                        else policy.standin_error_rules
+                    }
                 ),
             ) as provider:
-                limiter = Limiter(policy, ledger, clock)
+                limiter = Limiter(policy, ledger, clock, real=is_real)
                 breaker = CircuitBreaker(policy.breaker, clock)
                 engine = RetrievalEngine(clock=clock)
                 app.state.control = ControlPlane(
@@ -333,6 +348,7 @@ def main() -> int:
     parser.add_argument("--allow-unsafe-naive", action="store_true")
     parser.add_argument("--port", type=int)
     parser.add_argument("--check", action="store_true")
+    parser.add_argument("--real", action="store_true")
     args = parser.parse_args()
     try:
         import uvicorn
@@ -343,12 +359,13 @@ def main() -> int:
             base_url=args.base_url,
             no_cache=args.no_cache,
             allow_unsafe_naive=args.allow_unsafe_naive,
+            real=args.real,
         )
         port = policy.server.port if args.port is None else args.port
         if not 0 <= port <= 65535:
             raise ValueError("Invalid local port")
         if args.check:
-            print("Relay startup valid: stand-in, one worker, local-only")
+            print("Relay startup valid: explicit provider, one worker, local listener")
             return 0
         uvicorn.run(
             app,
@@ -359,7 +376,7 @@ def main() -> int:
             timeout_graceful_shutdown=policy.server.graceful_shutdown_s,
         )
         return 0
-    except (ValueError, OSError):
+    except (ValueError, OSError, RealCallDenied):
         print("Relay refused: invalid local configuration or unavailable corpus")
         return 2
 
