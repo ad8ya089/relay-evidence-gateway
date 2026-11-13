@@ -79,12 +79,12 @@ class Draft(StrictModel):
 class VerifyVerdict(StrictModel):
     i: int = Field(ge=0, strict=True)
     v: Literal["supported", "unsupported", "overstated"]
-    why: str
+    why: str = Field(min_length=1)
 
     @field_validator("why")
     @classmethod
     def bounded_reason(cls, value: str) -> str:
-        if len(value.split()) > pipeline_settings().verdict_reason_max_words:
+        if not value.strip() or len(value.split()) > pipeline_settings().verdict_reason_max_words:
             raise ValueError("Verifier reason exceeds configured word bound")
         return value
 
@@ -200,3 +200,23 @@ class Outcome(StrictModel):
     validation: ValidationResult | None = None
     states: list[State] = Field(default_factory=list)
     _delivery_seal: str | None = PrivateAttr(default=None)
+
+    @property
+    def tokens_in(self) -> int | None:
+        return self.usage.tokens_in
+
+    @property
+    def tokens_out(self) -> int | None:
+        return self.usage.tokens_out
+
+    @property
+    def tokens_cached(self) -> int | None:
+        return self.usage.tokens_cached
+
+    @property
+    def counted_tokens(self) -> int | None:
+        return self.usage.counted_tokens
+
+    @property
+    def provider_calls(self) -> int:
+        return sum(call.dispatched for call in self.calls)
