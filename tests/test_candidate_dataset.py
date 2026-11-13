@@ -22,7 +22,7 @@ def test_candidate_distribution_and_model_facing_isolation() -> None:
 
 
 def test_duplicate_and_wrong_version_refused(tmp_path: Path) -> None:
-    rows = [json.loads(l) for l in QUESTIONS.read_text(encoding="utf-8").splitlines()]
+    rows = [json.loads(line) for line in QUESTIONS.read_text(encoding="utf-8").splitlines()]
     for change in ("duplicate", "version"):
         data = [r.copy() for r in rows]
         if change == "duplicate":
