@@ -1,0 +1,37 @@
+# P4 engineering choices, assumed; no quality/latency calibration claimed.
+status: assumed
+default_setting: C
+deadline_ms: 8000
+max_question_chars: 4096
+max_claim_chars: 2000
+max_claims: 8
+quote_max_words: 40
+note_max_words: 20
+verdict_reason_max_words: 15
+broaden_max: 2
+repair_max: 1
+repair_min_remaining_ms: 1500
+draft_max_completion_tokens: 450
+verify_max_completion_tokens: 120
+draft_timeout_ms: 5000
+verify_timeout_ms: 3000
+draft_stream: true
+verify_stream: true
+reasoning_effort: low
+tool_timeout_ms: 1500
+tool_retry_max: 1
+tool_retry_min_remaining_ms: 250
+tool_fault_prob: 0.0
+seed: 20261113
+gate_min_score: 0.0
+gate_min_keyword_coverage: 0.25
+gate_min_matching_terms: 1
+numeric_context_chars: 180
+delivery_chunk_chars: 256
+stopwords: [a, an, the, is, are, was, were, what, which, who, how, does, do, did, in, "on", of, to, for, and, or, with, from, according, paper, papers, explain, describe, compare, between, its, it, their, that, this, about, please, me]
+section_terms:
+  explain: [architecture, method]
+  compare: [architecture, comparison]
+  number: [latency, evaluation]
+  limitation: [limitations, discussion]
+  absent: []

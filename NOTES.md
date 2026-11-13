@@ -479,3 +479,42 @@ Commands available: `make standin PROFILE=development` (default port 8081),
 already occupied, and `make calibrate CALIBRATE_ARGS="--events PATH"`.
 Calibration application is explicit via stand-in `--calibration PATH`; it never
 silently rewrites chosen/assumed profile configuration.
+
+# P4 integration contract (13 November 2026)
+
+Starting main/origin main are P3 `0d25179b5e7e48e0a0cdc427050e787fb8f1666b`,
+with a clean tree. Original documents and actual eval questions/gold are protected.
+
+- P1 `RetrievalEngine.search_papers(query, paper_filter=None, top_k=None,
+  setting="C", *, paper_hint=None, numeric=None)` is async and returns the existing
+  `RetrievalResult`/`RetrievalHit` models. Metadata includes pinned IDs/versions,
+  title, section (optional in P1), PDF pages, scores/ranks/method diagnostics.
+  Numeric=True already appends previous/next same-section/kind chunks. There is
+  no separate public neighbour-fetch API; P4 uses this existing capability.
+  P1 work may continue in its CPU thread after cancellation; no duplicate worker
+  is deliberately started after a timeout while that work could still be running.
+- P2 `Provider.complete(LLMRequest, *, on_delta=None)` buffers results, returns
+  nullable `Usage`, first-content/reasoning timings and headers, and raises typed
+  provider errors/cancellation. `CallMetadata` carries shared request/run IDs,
+  unique call IDs, kind and arrival_ns. JSON Object streaming and non-stream
+  JSON Schema/Pydantic validation are already implemented. No provider retry.
+  Ledger records are owned by P2; P4 reconciles by those call IDs without inserting
+  duplicate rows. Unknown usage remains unknown, with known subtotals retained.
+- P3 detects RELAY_DRAFT_V1 / RELAY_VERIFY_V1 in system/developer content. Draft
+  chunks are multiline `<<chunk:ID>>...<<end>>`. Verifier user content is exactly
+  the JSON list `{i, claim, quotes}`; no chunks/question accompany verification.
+  Initial static messages form P3's exact model-aware cache prefix. Repairs use
+  the same draft prefix. P3 is a deterministic plumbing simulator, not a semantic
+  research-answer evaluator; no real quality or Groq behavior is inferred.
+- P2 Clock/EventWriter remain the sole timing/event abstractions. P4 events
+  contain IDs, counts, statuses and timings, never prompts, chunks or draft text.
+
+Clarifications: local/model evidence refusals have status ok; validation
+abstention has status error, per design section 5 and architecture. P4 explicitly
+requires section/page/version provenance before release, so a P1 hit with missing
+section can be retrieved but cannot be cited. Numerical checks are conservative,
+bounded local checks plus the required verifier; they are not a universal proof
+of semantic entailment. First-user-token timing is recorded only on actual
+validated-generator delivery, distinct from internal TTFT and handle completion.
+No P5 control plane, answer cache, /ask API, loadgen or real Groq requests belong
+to this task. All configurable starting thresholds are assumed/chosen, uncalibrated.
