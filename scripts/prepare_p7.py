@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from eval.dataset import load_key
-from eval.grade import Grade
+from eval.grade import AssistedGrade, Grade
 from scripts.build_results_csv import json_rows, read_csv, write_csv
 from scripts.result_models import ResultRow
 
@@ -54,18 +54,21 @@ def convert(raw: dict[str, object], key: dict[str, object]) -> ResultRow:
 
 def build(root: Path = Path("results/p7")) -> list[ResultRow]:
     rows = read_csv(Path("results/results.csv"))
-    local = Path("results/evidence_completion/experiments")
-    if (local / "client_rows.jsonl").exists():
-        from scripts.build_results_csv import build as build_load
+    from scripts.build_results_csv import build as build_load
 
-        rows.extend(
-            build_load(
-                [local / "client_rows.jsonl"],
-                [local / "events.jsonl"],
-                sorted(local.glob("runs/*/run_manifest.json")),
-                [],
+    for local in [
+        Path("results/evidence_completion/experiments"),
+        Path("results/final_completion/experiments"),
+    ]:
+        if (local / "client_rows.jsonl").exists():
+            rows.extend(
+                build_load(
+                    [local / "client_rows.jsonl"],
+                    [local / "events.jsonl"],
+                    sorted(local.glob("runs/*/run_manifest.json")),
+                    [],
+                )
             )
-        )
     keys = load_key()
     for path in sorted(root.glob("standin_evaluation*/eval-*/rows.jsonl")):
         for raw in json_rows([path]):
@@ -86,6 +89,20 @@ def build(root: Path = Path("results/p7")) -> list[ResultRow]:
     row.scenario = "real_smoke"
     row.record_kind = "eval"  # Diagnostic only; no question_id, so excluded from Table 3.
     rows.append(row)
+    assisted = Path("results/final_completion/review/grades.csv")
+    by_id = {r.request_id: r for r in rows if r.question_id and r.record_kind == "eval"}
+    if assisted.exists():
+        with assisted.open(encoding="utf-8", newline="") as source:
+            for raw in csv.DictReader(source):
+                grade = AssistedGrade.model_validate(raw)
+                row = by_id[grade.request_id]
+                row.answer_grade = grade.answer_grade
+                row.grading_provenance = grade.grader_provenance
+                row.review_uncertain = False
+        with (assisted.parent / "all_reviews.csv").open(encoding="utf-8", newline="") as source:
+            for raw in csv.DictReader(source):
+                if raw["uncertain"] == "True":
+                    by_id[raw["request_id"]].review_uncertain = True
     grades_path = root / "grades.csv"
     if grades_path.exists():
         with grades_path.open(encoding="utf-8", newline="") as source:
@@ -95,6 +112,7 @@ def build(root: Path = Path("results/p7")) -> list[ResultRow]:
             if grade.request_id not in by_id:
                 raise ValueError("Grade does not reference a candidate evaluation result")
             by_id[grade.request_id].answer_grade = grade.answer_grade
+            by_id[grade.request_id].grading_provenance = "human"
     write_csv(rows, root / "results.csv")
     return rows
 

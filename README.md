@@ -1,59 +1,156 @@
-# The Relay: project pack
+# Relay
 
-Everything you (and Codex) need to build the Vaani "Relay" assignment. Deadline: **Sat 14 Nov 2026, 9:38 AM IST**. Plan to submit by **Fri 13 Nov, 11 PM IST**; treat Saturday morning as buffer only.
+A paper-grounded QA service with evidence checks, quota-aware admission and an OpenAI-compatible stand-in for local load testing.
 
-## Reading order
+## Project overview
 
-| # | File | What it is |
-|---|------|-----------|
-| 0 | `docs/00_REQUIREMENTS_TRACEABILITY.md` | Every requirement from the PDF brief and the email, mapped to the artifact that satisfies it. Re-check before submitting. |
-| 1 | `docs/01_DESIGN.md` | The decisions, the numbers, and the defence of each. |
-| 2 | `docs/02_ARCHITECTURE.md` | Components, state machine, schemas, event log, repo layout. |
-| 3 | `docs/03_RETRIEVAL_EVAL.md` | Ingestion, 3 LLM-graded retrieval settings + offline diagnostics, how to write your 18 questions. |
-| 4 | `docs/04_STANDIN_LOADTEST.md` | Stand-in service, calibration, 7 scenarios, metric and CSV definitions. |
-| 5 | `docs/05_DEPLOYMENT_RUNBOOK.md` | Setup, commands, Groq account steps, Drive submission. |
-| 6 | `docs/06_WRITEUP_TEMPLATE.md` | The 2-page write-up skeleton with the brief's exact headings and tables. |
-| 7 | `docs/07_PLAN_AND_RISKS.md` | Hour-by-hour plan, token budget across UTC days, risks. |
-| - | `AGENTS.md` | Drop in the repo root; Codex/Cursor read it every run. |
-| - | `prompt.md` | **Seven** build prompts for Codex, in order. |
+I built Relay around one rule: an answer reaches the user only after validation. It searches three pinned papers, drafts claims with supporting quotes, checks the quotes and asks a verifier to assess support. When it cannot verify an answer, it abstains.
 
-## The one-paragraph design
+## Problem being solved
 
-An application-owned state machine (interpret, `search_papers` tool, evidence gate with broaden loop, draft, deterministic + LLM validation, at most one repair, release) sits behind a control plane that owns admission, deadlines, token reservations, retries and a cache. Answers are **buffered until validated**, then released with citations rendered by code from chunk metadata, so the model cannot forge a citation. When capacity runs out the system sheds at the door (fast, with Retry-After) instead of queueing or sending an unverified answer.
+A fast model call does not guarantee a fast answer. Retrieval, verification, retries and queueing share the same deadline and quota. Relay reserves work before admitting it and rejects requests it cannot finish safely.
 
-## What I changed versus the ChatGPT plan, and why
+## Architecture
 
-I kept its skeleton (Python/FastAPI/asyncio/httpx/SQLite, application-led orchestration, validated release, open-loop load, CSV-first). These are the changes:
+```mermaid
+flowchart LR
+    Client --> API[Relay API]
+    API --> Control[Admission and quota control]
+    Control --> Pipeline[QA pipeline]
+    Pipeline --> Search[search_papers tool]
+    Search --> Papers[Pinned paper chunks]
+    Pipeline --> Provider{Compatible adapter}
+    Provider --> Standin[Local stand-in]
+    Provider --> Groq[Guarded Groq]
+    Pipeline --> Check[Evidence checks and verifier]
+    Check --> Release[Sealed response]
+    Control --> Ledger[(SQLite ledger)]
+```
 
-| # | Change | Why |
-|---|--------|-----|
-| 1 | **Design around tokens, not requests.** | Groq's current docs list the free tier at 30 RPM / 1K RPD / **8K TPM** / **200K TPD** for `openai/gpt-oss-20b` and `-120b`. At ~2.8K tokens per answer that is ~2.9 answers/min and ~70 answers/day, so TPM/TPD bind long before RPM. The ChatGPT plan treated RPM as the headline. |
-| 2 | Default model `openai/gpt-oss-20b`, `reasoning_effort=low`. | It is on the current free table and supports prompt caching. Reasoning tokens count as output, so effort must be low. The Llama models it quoted from tutorials are no longer in the docs table. Confirm on your Limits page. |
-| 3 | **Static-prefix-first prompts + record `cached_tokens`.** | Groq docs: cached tokens do not count toward rate limits. A fixed system prompt and schema first, variable content last, buys real headroom. Measure it. |
-| 4 | **Compact verifier.** Verifier sees only claims + quoted spans, never full chunks. | ~600 input tokens instead of ~2K. Same validation, a third of the budget. |
-| 5 | **Quote-anchored evidence.** Every claim cites `chunk_id` + a verbatim quote; code checks the quote is a substring of the chunk, and renders the citation from metadata. | Cheap, deterministic, kills fabricated citations before any model call. |
-| 6 | **No partial answers.** Full validated answer, or an explicit "could not verify". | A half-answer that silently drops a claim is an embarrassing-answer risk. |
-| 7 | **Answer cache + single-flight coalescing.** | The brief says bursts come "right after something goes wrong for many users at once", so many near-identical questions. Cache hits cost zero tokens and are still served when the daily budget is gone. Disabled in the main scenarios and shown in one extra scenario. |
-| 8 | **Header reconciliation.** After every response the limiter overwrites its local estimate with `x-ratelimit-remaining-tokens`. | Limits "can change without notice". Headers are ground truth; local counters drift. |
-| 9 | **Predictive admission**: reject at the door if the projected wait exceeds the budget, instead of FIFO-then-timeout. | Never spend tokens on work that will miss its deadline. |
-| 10 | **Stand-in uses "scaled" limits** (free-tier ratios x30) for heavy scenarios, plus an exact-limit fidelity run against the real service; one scenario changes limits mid-run without telling the system. | Exact free limits would make a 200-request run last over an hour. Scaling every limit by the same factor keeps *which limit binds* identical. |
-| 11 | **Dropped the optional planner LLM call.** Interpretation is local only. | A serial call costing ~1K tokens at 8K TPM is not affordable. |
-| 12 | **Free retrieval diagnostics.** Offline gold-hit@k for four configs at zero tokens; only three are LLM-graded. | Token budget cannot afford a 4th LLM-graded setting. |
-| 13 | fastembed (ONNX) instead of sentence-transformers/torch. | Smaller install, faster CPU, same function. |
-| 14 | CSV keeps the 12 required columns first, in the brief's order; extras appended; run-level config lives in `run_manifest.json`. | Brief says every table number must be computable from the file; extras are needed for peak queue length etc. |
-| 15 | **You write the 18 questions and gold answers.** AI does not. | The brief says "questions you wrote yourself" and the interview probes it. |
-| 16 | Corrected the timeline. | Deadline is Sat 09:38 IST. Groq daily limits reset at 00:00 UTC (05:30 IST) per a secondary source; verify. That gives you only three full budget days. See `07`. |
+## End-to-end request lifecycle
 
-## Things I could not verify, so verify them first (Prompt 2 builds the probes)
+Interpret → `search_papers` tool → evidence gate → draft → deterministic validation → verifier → optional single repair → sealed release.
 
-1. Your account's actual limits on the Limits page (docs say "high level summary and there may be exceptions"). Also hover TPM for an "X in / Y out" split.
-2. Whether `response_format: json_schema` works together with `stream: true` on `gpt-oss-20b`, and where `usage` appears in a streamed response.
-3. The 429 body shape and `retry-after` for a TPM versus an RPM hit.
-4. Whether failed (429) requests consume tokens or requests against your quotas.
-5. The daily reset time (secondary sources say 00:00 UTC; the official page did not state it in what I fetched). Capture `x-ratelimit-reset-requests` at the start of a day.
-6. Current list prices for the model (for the "cost per 1,000 answers" column). Record the date you read them.
+The gate can broaden retrieval. A failed check can lead to one repair if the deadline and token budget allow it. Unverified draft text is never streamed to the client.
 
-## Two honesty notes
+## Retrieval and evidence validation
 
-- **Vaani feedback is yours.** I looked at the homepage: it shows "Lowest latency: best-in-class p90 latency of ~450ms" and a "Sub-500ms multilingual engine" stat, plus Teacher AI, Memories and call-screening features. Visit it yourself and write what you honestly think. My notes are in `06`.
-- **AI-disclosure.** The brief wants your *real* conversation history. That includes this planning phase (ChatGPT and this chat). Export them, do not clean them up, and do not claim you caught an AI mistake you did not catch. `07` has a "where to look for AI mistakes" checklist so the real ones you find are easy to spot.
+The library contains exactly Transformer **1706.03762 v7**, Moshi **2410.00037 v1**, and Dynamic Chunking **2507.07955 v2**. Citation pages are one-based PDF pages.
+
+| Setting | Chunk target / overlap | Retrieval |
+|---|---|---|
+| A | 256 / 40 tokens | BM25, six chunks |
+| B | 512 / 64 tokens | BM25, four chunks |
+| C | 384 / 48 tokens | Hybrid, twelve candidates to four, reranking when available |
+
+Each claim carries a chunk ID and quote. Code checks membership, pinned metadata, normalized substring membership and numeric support. Citations come from stored metadata. A missing or malformed verifier result fails validation. Gold references remain outside retrieval and provider prompts.
+
+## Provider and stand-in design
+
+The same HTTP adapter supports Groq and a local compatible stand-in. Stand-in is the default. It can stream, slow down under load, fail and return simulated quota errors. Its scripted answers exercise the pipeline; their quality does not predict Groq answer quality.
+
+## Quota management and admission control
+
+Admission checks queue space, projected wait, deadlines and minute/day budgets. Real attempts require durable SQLite reservations. Actual usage and provider headers reconcile them; missing cached usage remains unknown. Console limits and timestamped response headers retain separate provenance.
+
+## Retry, cache and circuit-breaker strategy
+
+The orchestrator owns retries; transport retries are disabled. Bounded retries share a request-wide limit and global budget, with jitter and deadline checks. Only verified results enter the cache. Single-flight combines identical work. A breaker stops repeated failing work. Daily exhaustion still permits eligible verified cache hits.
+
+## Experiments and results
+
+There are two historical Groq attempts: connectivity and an end-to-end smoke. The smoke safely abstained after quote validation failed. Real A/B/C quality remains unmeasured; fresh quota evidence is required before further real evaluation.
+
+Local A/B/C outputs and load runs are retained separately. Development runs are uncalibrated. One draft timing sample does not establish a latency distribution or verifier behaviour. Output reviews record rationale, uncertainty and reviewer provenance; a valid citation alone does not establish a complete answer.
+
+## Repository structure
+
+| Path | Contents |
+|---|---|
+| `relay/app/` | Interpretation, prompts, validation and sealed delivery |
+| `relay/control/` | Admission, limiter, ledger, retries, scheduling and breaker |
+| `relay/providers/` | HTTP adapter, parsing and real-call guard |
+| `relay/retrieval/` | PDF ingestion, chunks and search |
+| `standin/`, `loadgen/` | Simulation and open-loop HTTP experiments |
+| `eval/` | Versioned questions, isolated references and grading tools |
+| `scripts/` | Aggregation, reports and submission checks |
+| `config/` | Typed application and experiment configuration |
+| `results/` | Ignored local evidence and preserved historical runs |
+| `relay-submission/` | Final local package: PDF, code, CSV and raw records |
+
+## Setup instructions
+
+Use Python 3.11+ and uv:
+
+```powershell
+uv sync --locked --extra dev
+uv run --locked --extra dev python -m relay.retrieval.ingest --dense
+```
+
+Ingestion downloads configured paper/model assets, verifies pinned PDF versions and builds local indexes. It does not call Groq. Keep generated caches out of Git.
+
+## Running tests
+
+```powershell
+uv run --locked --extra dev python -m pytest
+uv run --locked --extra dev python -m ruff check .
+uv run --locked --extra dev python -m ruff format --check .
+```
+
+`make test` runs the same suite. Tests use fixtures and local services, not Groq. Mypy is not configured.
+
+## Running the application
+
+Start these in separate terminals:
+
+```powershell
+uv run --locked --extra dev python -m standin.service --profile development
+uv run --locked --extra dev python -m relay.app.api
+```
+
+The API exposes `/ask`, `/health` and `/state`. Keep one worker because admission and quota state are process-local. `python -m relay.app.api --check` checks startup configuration.
+
+## Running stand-in scenarios
+
+```powershell
+uv run --locked --extra dev python -m loadgen --help
+uv run --locked --extra dev python -m loadgen run --scenario development_smoke --output-root results/my-local-run
+```
+
+Use a fresh output root. Calibrated scenarios enforce account/profile/capacity prerequisites. Historical development runs remain available when later runs supersede them in a table.
+
+## Running retrieval evaluation
+
+```powershell
+uv run --locked --extra dev python -m eval.dataset
+uv run --locked --extra dev python -m eval.runner --settings A B C --base-url http://127.0.0.1:8081/openai/v1 --output results/my-evaluation
+```
+
+The second command needs the local stand-in running. It does not assign correctness grades. `python -m eval.grade --help` describes human review. Separate assistant reviews never claim human confirmation.
+
+## Real Groq configuration and safety
+
+Keep the key in private environment configuration. Real startup requires `RELAY_PROVIDER=groq`, `RELAY_ALLOW_REAL=1` and explicit `--real`. `RELAY_REAL_TOKEN_CAP` and `RELAY_REAL_REQUEST_CAP` enforce reservations. Never copy credentials into commands, logs or reports.
+
+The standalone smoke allowance is consumed. Do not repeat it. Candidate A/B/C evaluation additionally requires fresh quota evidence and a safe complete-batch plan. Historical remaining-quota headers are not current quota. Probe commands default to dry-run.
+
+## Results and provenance
+
+`results/results.csv` remains the original 84-row P6 file. The combined CSV is generated at `results/p7/results.csv` and copied to `relay-submission/results.csv`. This preserves historical bytes.
+
+```powershell
+uv run --locked --extra dev python -m scripts.prepare_p7
+uv run --locked --extra dev python -m scripts.aggregate --submission
+uv run --locked --extra dev python -m scripts.report
+uv run --locked --extra dev python -m scripts.package_submission
+uv run --locked --extra dev python -m scripts.check_submission --structural-only
+uv run --locked --extra dev python -m scripts.check_submission
+```
+
+The final check blocks when evidence or approvals are missing. Aggregation is the sole calculator for tables. Manifests distinguish real observations, development measurements, fitted values, assumptions and missing measurements. Archives retain earlier PDFs and failed attempts.
+
+## Limitations and known gaps
+
+Real A/B/C quality, verifier timing, complete calibration, real quota-error behaviour and recovery are not measured. Development results cannot establish Groq capacity. Genuine Limits/Usage screenshots are included; exact current remaining quota and full conversation exports are unavailable. Candidate approval of references, grades and feedback remains outstanding. Drive upload and form submission are separate actions.
+
+There is no distributed limiter or per-user fairness. A correctly quoted sentence can still omit material parts of a question; the output review checks completeness as well as support.

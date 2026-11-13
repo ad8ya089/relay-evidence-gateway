@@ -9,7 +9,7 @@ from pathlib import Path
 import fitz
 
 from eval.dataset import load_key, load_questions, validate_dataset
-from scripts.aggregate import submission_tables
+from scripts.aggregate import submission_tables, verified_account_evidence
 from scripts.build_results_csv import call_metrics, events_by_request, json_rows, read_csv
 from scripts.report import headings
 from scripts.result_models import ResultRow
@@ -113,7 +113,8 @@ def validate(root: Path, *, readiness: bool = True) -> dict[str, object]:
             root / "code/eval/answer_keys/candidate-v1.jsonl",
         )
         source = json.loads((root / "raw/connectivity_result.json").read_text())["observed"]
-        expected, diagnostics = submission_tables(rows, source)
+        account = verified_account_evidence(root / "raw/account_evidence/manifest.json")
+        expected, diagnostics = submission_tables(rows, source, account)
         actual = json.loads((root / "raw/tables.json").read_text())
         if actual != expected:
             errors.append("Tables do not match recomputed CSV/evidence values")
@@ -144,7 +145,22 @@ def validate(root: Path, *, readiness: bool = True) -> dict[str, object]:
         for name, digest in hashes.items():
             path = member(root / "code", name)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-                errors.append("Protected hash mismatch: " + name)
+                exceptions = root / "code/config/authorized_changes.json"
+                approved = (
+                    json.loads(exceptions.read_text()).get(name) if exceptions.exists() else None
+                )
+                allowed = name == "README.md" and approved and path.is_file()
+                if allowed:
+                    original = member(root / "code", approved["original_copy"])
+                    allowed = (
+                        approved["original_sha256"] == digest
+                        and original.is_file()
+                        and hashlib.sha256(original.read_bytes()).hexdigest() == digest
+                        and hashlib.sha256(path.read_bytes()).hexdigest()
+                        == approved["updated_sha256"]
+                    )
+                if not allowed:
+                    errors.append("Protected hash mismatch: " + name)
         manifest = json.loads((root / "artifact_manifest.json").read_text())
         declared = [entry["path"] for entry in manifest["files"]]
         actual_paths = {
@@ -165,8 +181,16 @@ def validate(root: Path, *, readiness: bool = True) -> dict[str, object]:
         selected = {
             diagnostics.get(f"evaluation/{source}/selected_run") for source in ["real", "stand-in"]
         }
-        if any(r.question_id and r.run_id in selected and not r.answer_grade for r in rows):
-            pending.append("Manual grades remain blank")
+        missing = sum(
+            bool(r.question_id and r.run_id in selected and not r.answer_grade) for r in rows
+        )
+        if missing:
+            pending.append(f"{missing} selected evaluation outputs remain uncertain or ungraded")
+        if any(r.grading_provenance == "assistant_review" for r in rows):
+            pending.append("Candidate confirmation of assistant reviews is pending")
+        feedback = root / "reports/website_review.json"
+        if feedback.exists() and not json.loads(feedback.read_text()).get("candidate_approved"):
+            pending.append("Candidate approval of website feedback is pending")
         if not list((root / "raw").glob("limits_page_*.png")):
             pending.append("Required real Limits-page screenshot is missing")
         history = [

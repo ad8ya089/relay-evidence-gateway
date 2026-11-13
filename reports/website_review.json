@@ -1,0 +1,18 @@
+{
+  "observed_date": "2026-11-14",
+  "sources": [
+    "https://www.vaani.dev/",
+    "https://www.vaani.dev/developers",
+    "https://docs.vaani.dev/",
+    "https://www.vaani.dev/pricing"
+  ],
+  "scope": "Public pages only; no product feature or account tested",
+  "observations": [
+    "Homepage emphasizes conversational behaviour and contextual memory.",
+    "Developer page distinguishes dispatch from completed calls, and gives webhook examples.",
+    "Developer page describes full-turn latency separately from interruption timing."
+  ],
+  "draft_provenance": "assistant-prepared wording; candidate approval pending",
+  "candidate_approved": false,
+  "observation_timezone": "Asia/Kolkata"
+}

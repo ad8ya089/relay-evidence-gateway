@@ -1,6 +1,7 @@
 """The single calculator for experimental tables, capacity and generator diagnostics."""
 
 import argparse
+import hashlib
 import json
 from collections import defaultdict
 from datetime import date
@@ -397,7 +398,10 @@ def main() -> int:
     if args.submission:
         root = Path("results/p7")
         rows = read_csv(root / "results.csv")
-        data, diagnostics = submission_tables(rows)
+        account = verified_account_evidence(
+            Path("results/final_completion/account_evidence/manifest.json")
+        )
+        data, diagnostics = submission_tables(rows, account=account)
         root.joinpath("tables.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
         root.joinpath("metrics.json").write_text(
             json.dumps(diagnostics, indent=2), encoding="utf-8"
@@ -456,6 +460,12 @@ def quality(group: list[ResultRow]) -> dict[str, object]:
         "asked": len(group),
         "graded": len(graded),
         "ungraded": len(group) - len(graded),
+        "uncertain": sum(r.review_uncertain is True for r in group),
+        "assistant_reviewed": sum(r.grading_provenance == "assistant_review" for r in graded),
+        "grade_counts": {
+            name: sum(r.answer_grade == name for r in graded)
+            for name in ["correct", "wrong", "refused_correctly", "refused_wrongly"]
+        },
         "answerable": sum(r.answerable is True for r in group),
         "unanswerable": sum(r.answerable is False for r in group),
         "correct_pct": sum(r.answer_grade == "correct" for r in graded) * 100 / len(graded)
@@ -489,8 +499,25 @@ def quality(group: list[ResultRow]) -> dict[str, object]:
     }
 
 
+def verified_account_evidence(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    evidence = json.loads(path.read_text())
+    for entry in evidence["screenshots"]:
+        artifact = (path.parent / entry["filename"]).resolve()
+        if (
+            not artifact.is_relative_to(path.parent.resolve())
+            or not artifact.is_file()
+            or hashlib.sha256(artifact.read_bytes()).hexdigest() != entry["sha256"]
+        ):
+            raise ValueError("Account screenshot differs from reviewed evidence")
+    return evidence
+
+
 def submission_tables(
-    rows: list[ResultRow], connectivity: dict[str, object] | None = None
+    rows: list[ResultRow],
+    connectivity: dict[str, object] | None = None,
+    account: dict[str, object] | None = None,
 ) -> tuple[dict[str, object], dict[str, object]]:
     connectivity = (
         connectivity
@@ -514,6 +541,13 @@ def submission_tables(
             "Candidate-reported organization console limit.",
             "unverified; screenshot missing",
         ]
+    if account:
+        for index, field in [(0, "rpm"), (3, "tpd")]:
+            t1[index][1:] = [
+                str(account["organization_limits"][field]),
+                "Organization Limits screenshot; file dated 2026-11-14; capture time unverified",
+                "high for displayed limit",
+            ]
     request_id = connectivity.get("provider_request_id")
     if request_id:
         for index in [1, 2]:
@@ -534,7 +568,13 @@ def submission_tables(
         development = [r for r in rows if r.scenario == "development_" + name]
         label = name
         if not group and development:
-            group = development
+            selected_run = max(development, key=lambda r: r.start_time).run_id
+            group = [r for r in development if r.run_id == selected_run]
+            diagnostics[name + "/selected_run"] = selected_run
+            for old_run in sorted({r.run_id for r in development}):
+                diagnostics[name + "/run/" + old_run] = scenario_metrics(
+                    [r for r in development if r.run_id == old_run], {}
+                )
             label = name + " (dev)"
         source = "real" if name in {"eval_real", "real_burst6", "real_smoke"} else "stand-in"
         if not group:
@@ -599,8 +639,8 @@ def submission_tables(
                 [
                     f"{setting}: {settings[setting]} ({source})",
                     str(q["asked"]),
-                    show(q["correct_pct"]),
-                    show(q["wrong_pct"]),
+                    f"{show(q['correct_pct'])} (graded n={q['graded']})",
+                    f"{show(q['wrong_pct'])} (graded n={q['graded']})",
                     f"{show(q['refusal_accuracy'])} (graded n={q['unanswerable_graded_n']})",
                     f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
                     "/".join(show(m["first_token_ms"][f"p{p}"]) for p in [50, 95])
@@ -613,6 +653,13 @@ def submission_tables(
                 diagnostics[f"evaluation/{source}/{setting}/{paper}"] = quality(
                     [r for r in group if r.paper_id == paper]
                 )
+    review_groups = [diagnostics[f"evaluation/stand-in/{setting}"] for setting in ["A", "B", "C"]]
+    diagnostics["review_summary"] = {
+        "asked": sum(q["asked"] for q in review_groups),
+        "reviewed": sum(q["graded"] for q in review_groups),
+        "uncertain": sum(q["uncertain"] for q in review_groups),
+        "provenance": "assistant_review; candidate confirmation pending",
+    }
     return {
         "Table 1: Limits found in the real service": {
             "headers": ["Limit", "Value you found", "How you found it", "Confidence"],

@@ -11,8 +11,8 @@ PINS = {
     "moshi": ("2410.00037", 1),
     "dynamic_chunking": ("2507.07955", 2),
 }
-QUESTIONS = Path("eval/datasets/candidate-v1/questions.jsonl")
-KEY = Path("eval/answer_keys/candidate-v1.jsonl")
+QUESTIONS = Path("eval/datasets/candidate-final/questions.jsonl")
+KEY = Path("eval/answer_keys/candidate-final.jsonl")
 
 
 class CandidateQuestion(BaseModel):

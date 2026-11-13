@@ -23,7 +23,7 @@ AUDIT = (
     "generator_lag_ms transport_wait_ms scheduled_arrival_utc question_id answerable record_kind "
     "fixture_only terminal_complete client_status accounting_diagnostics queue_high_water "
     "peak_duplicate_provider_operations free_allocation server_cleanup_observed arrival_kind "
-    "paper_id answer_disposition"
+    "paper_id answer_disposition grading_provenance review_uncertain"
 ).split()
 COLUMNS = REQUIRED + EXTRA + AUDIT
 
@@ -96,6 +96,9 @@ class ResultRow(Model):
     arrival_kind: Literal["constant", "step", "burst", "ramp", "one_shot"] | None = None
     paper_id: str | None = None
     answer_disposition: Literal["answered", "refused", "failed"] | None = None
+
+    grading_provenance: Literal["human", "assistant_review"] | None = None
+    review_uncertain: bool | None = None
 
     _timestamp = field_validator("start_time")(timestamp)
 

@@ -24,23 +24,29 @@ def real_plan(
 ) -> dict[str, object]:
     policy, safety = load_policy(), SafetySettings()
     e = policy.estimates[setting]
-    initial = (
-        e.draft_input
-        + e.verify_input
-        + policy.normal.draft_max_completion_tokens
-        + policy.normal.verify_max_completion_tokens
-        + policy.safety_tokens
-    )
-    worst = count * initial * (1 + policy.normal.repair_max) * (1 + policy.retry.max_per_request)
+    draft = e.draft_input + policy.normal.draft_max_completion_tokens + policy.safety_tokens
+    verifier = e.verify_input + policy.normal.verify_max_completion_tokens + policy.safety_tokens
+    # The repair carries the rejected completion and complaint/envelope overhead.
+    # This is a conservative estimate; actual serialized messages are reserved again at dispatch.
+    repair_growth = policy.normal.draft_max_completion_tokens + policy.safety_tokens
+    repair = draft + repair_growth
+    initial = draft + verifier
+    calls = 2 * (1 + policy.normal.repair_max) + policy.retry.max_per_request
+    per_question = initial + policy.normal.repair_max * (repair + verifier)
+    per_question += policy.retry.max_per_request * max(draft, repair, verifier)
+    worst = count * per_question
+    approval = Path("eval/datasets/candidate-final/provenance.json")
     reasons = []
+    if (
+        not approval.exists()
+        or json.loads(approval.read_text()).get("candidate_approval") != "approved"
+    ):
+        reasons.append("Final candidate dataset approval is not recorded")
     if worst > safety.real_token_cap:
         reasons.append(
             "Worst-case draft/verifier/repair/retry estimate exceeds existing session token cap"
         )
-    if (
-        count * 2 * (1 + policy.normal.repair_max) * (1 + policy.retry.max_per_request)
-        > safety.real_request_cap
-    ):
+    if count * calls > safety.real_request_cap:
         reasons.append("Worst-case provider attempts exceed existing request cap")
     if not evidence:
         reasons.append("Fresh verified organization remaining quota is not supplied")
@@ -62,6 +68,16 @@ def real_plan(
         "setting": setting,
         "questions": count,
         "initial_estimate": initial,
+        "draft_reservation_estimate": draft,
+        "verifier_reservation_estimate": verifier,
+        "repair_reservation_estimate": repair,
+        "repair_prompt_growth_allowance": repair_growth,
+        "shared_retry_max": policy.retry.max_per_request,
+        "provider_calls_max_per_question": calls,
+        "per_question_estimate_with_repair_retry": per_question,
+        "reasoning_allowance": "Included in completion caps; not additional output tokens",
+        "enforced_session_reservation_cap": safety.real_token_cap,
+        "estimate_status": "o200k approximation; not a provider-guaranteed input bound",
         "worst_case_tokens": worst,
         "session_cap": safety.real_token_cap,
         "status": "blocked" if reasons else "ready",
@@ -120,7 +136,7 @@ async def run(args: argparse.Namespace) -> Path:
             real=args.real,
             base_url=args.base_url,
             no_cache=True,
-            ledger_path=root / "usage.sqlite3",
+            ledger_path=Path("results/usage.sqlite3") if args.real else root / "usage.sqlite3",
             cache_path=root / "cache.sqlite3",
             events_path=root / "events.jsonl",
             run_id=run_id,

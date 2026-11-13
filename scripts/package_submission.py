@@ -51,6 +51,7 @@ def build(root: Path = Path("relay-submission")) -> None:
     events = [
         Path("results/events.jsonl"),
         Path("results/evidence_completion/experiments/events.jsonl"),
+        Path("results/final_completion/experiments/events.jsonl"),
         p7 / "real_smoke/events.jsonl",
         *sorted(p7.glob("standin_evaluation*/eval-*/events.jsonl")),
     ]
@@ -59,14 +60,17 @@ def build(root: Path = Path("relay-submission")) -> None:
             output.write(path.read_bytes())
     probe = Path("results/limit_probe.jsonl")
     (raw / "limit_probe.jsonl").write_bytes(probe.read_bytes() if probe.exists() else b"")
-    grades = p7 / "grades.csv"
+    reviewed = Path("results/final_completion/review/grades.csv")
+    grades = reviewed if reviewed.exists() else p7 / "grades.csv"
     if grades.exists():
         shutil.copyfile(grades, raw / "grades.csv")
     else:
         with (raw / "grades.csv").open("w", newline="", encoding="utf-8") as output:
             csv.DictWriter(output, fieldnames=list(Grade.model_fields)).writeheader()
-    manifests = sorted(p7.glob("**/manifest.json")) + sorted(
-        Path("results/evidence_completion/experiments/runs").glob("*/run_manifest.json")
+    manifests = (
+        sorted(p7.glob("**/manifest.json"))
+        + sorted(Path("results/evidence_completion/experiments/runs").glob("*/run_manifest.json"))
+        + sorted(Path("results/final_completion/experiments/runs").glob("*/run_manifest.json"))
     )
     (raw / "run_manifest.json").write_text(
         json.dumps(
@@ -80,6 +84,12 @@ def build(root: Path = Path("relay-submission")) -> None:
             indent=2,
         )
     )
+    for name in ["real_smoke_budget_check", "real_smoke_5000"]:
+        source = Path("results") / name / "manifest.json"
+        if source.exists():
+            dest = raw / name / "manifest.json"
+            dest.parent.mkdir(exist_ok=True)
+            shutil.copyfile(source, dest)
     for directory in ["real_smoke", "standin_evaluation", "standin_evaluation_repeat"]:
         for path in (p7 / directory).rglob("*"):
             if path.is_file() and path.suffix in {".json", ".jsonl", ".yaml"}:
@@ -119,41 +129,61 @@ def build(root: Path = Path("relay-submission")) -> None:
                 shutil.copyfile(path, target)
     for name in ["chatgpt", "codex"]:
         (root / "conversation_history" / name).mkdir(exist_ok=True)
-    (root / "CANDIDATE_ACTIONS.md").write_text(
-        "# Candidate actions required\n\n"
-        "- Supply actual raw/limits_page_2026-11-13.png; no screenshot bytes were found.\n"
-        "- Supply fresh dated Usage and Limits evidence before any real evaluation.\n"
-        "- Review raw/reference_review.json and grade the 54 corrected stand-in answers; "
-        "then regrade five.\n"
-        "- Supply personal Vaani feedback and full uncleaned ChatGPT/Codex exports.\n"
-        "- Complete safely budgeted real evaluations and sufficient calibration "
-        "when quota permits.\n"
-        "- Upload the completed folder to Drive, verify link access, submit the actual form, "
-        "and retain confirmation.\n"
-    )
-    (root / "README.md").write_text(
-        "# Relay submission - evidence incomplete\n\n"
-        "Run code with uv sync --locked --extra dev; make test.\n"
-        "Real execution requires explicit provider selection, permission and --real.\n"
-        "Tables come only from scripts.aggregate, CSV and captured provider evidence.\n"
-        "The real smoke safely abstained; it is not a successful evaluated answer.\n"
-        "Stand-in evaluations are ungraded; historical failures are retained.\n"
-        "Missing: human grades, real Limits screenshot, conversation exports and Vaani feedback.\n"
-        "Official calibrated scenarios and real A/B/C quality are not measured.\n"
-        "An empty raw/limit_probe.jsonl means no quota probe was performed.\n"
-        "Run python -m scripts.check_submission from the repository root.\n"
-    )
-    (root / "conversation_history/README.md").write_text(
-        "Candidate action required: add full actual uncleaned exports; "
-        "no transcript was invented.\n"
-    )
+    final = Path("results/final_completion")
+    for name in ["evaluation", "reports"]:
+        (root / name).mkdir(exist_ok=True)
+    for src, dest in [
+        (
+            Path("eval/datasets/candidate-final/questions.jsonl"),
+            root / "evaluation/questions.jsonl",
+        ),
+        (Path("eval/answer_keys/candidate-final.jsonl"), root / "evaluation/answer_key.jsonl"),
+        (Path("reports/submission_readme.md"), root / "README.md"),
+        (Path("reports/SUBMISSION_EMAIL.md"), root / "SUBMISSION_EMAIL.md"),
+        (Path("reports/SUBMISSION_CHECKLIST.md"), root / "CANDIDATE_ACTIONS.md"),
+        (final / "calibration_manifest.json", raw / "calibration_manifest.json"),
+    ]:
+        shutil.copyfile(src, dest)
+    for path in Path("reports").glob("*"):
+        if path.is_file():
+            shutil.copyfile(path, root / "reports" / path.name)
+    for directory, target in [
+        (final / "review", root / "evaluation/review"),
+        (final / "conversation_history", root / "conversation_history"),
+        (final / "experiments", raw / "final_experiments"),
+    ]:
+        for path in directory.rglob("*"):
+            if path.is_file() and path.suffix in {
+                ".json",
+                ".jsonl",
+                ".yaml",
+                ".txt",
+                ".csv",
+                ".md",
+                ".log",
+            }:
+                dest = target / path.relative_to(directory)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, dest)
+    account = final / "account_evidence"
+    for path in account.glob("*"):
+        (raw / "account_evidence").mkdir(exist_ok=True)
+        shutil.copy2(path, raw / "account_evidence" / path.name)
+        if path.suffix == ".png":
+            shutil.copy2(path, raw / path.name)
+    for path in final.glob("*.json"):
+        shutil.copyfile(path, root / "reports" / path.name)
     files = [
         {
             "path": str(p.relative_to(root)).replace("\\", "/"),
             "size": p.stat().st_size,
             "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
             "artifact_type": p.suffix.lstrip(".") or "text",
-            "origin": "source"
+            "origin": "candidate_provided"
+            if p.suffix == ".png" and p.name.startswith(("limits_page_", "usage_"))
+            else "assistant_review"
+            if "review" in p.parts
+            else "source"
             if "code" in p.relative_to(root).parts
             else "real"
             if "real_smoke" in p.parts or "connectivity" in p.name

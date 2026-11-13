@@ -7,7 +7,7 @@ import random
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from eval.dataset import load_key
 
@@ -30,8 +30,47 @@ class Grade(BaseModel):
     human_confirmed: Literal[True]
     round: int = Field(default=1, ge=1)
 
+    @field_validator("human_confirmed", mode="before")
+    @classmethod
+    def csv_confirmation(cls, value: object) -> object:
+        if value == "True":
+            return True
+        if value == "False":
+            return False
+        return value
+
+
+class AssistedGrade(Grade):
+    """Separate provenance contract; never masquerades as a human confirmation."""
+
+    human_confirmed: Literal[False] = False
+    grader_provenance: Literal["assistant_review"] = "assistant_review"
+    supporting_chunk_ids: str = "[]"
+    citation_validity: Literal["metadata_matches", "invalid", "none"] = "none"
+
+
+def save_assisted_grade(grade: AssistedGrade, path: Path) -> None:
+    grade = AssistedGrade.model_validate(grade.model_dump())
+    existing = (
+        list(csv.DictReader(path.open(newline="", encoding="utf-8"))) if path.exists() else []
+    )
+    if any(
+        r["request_id"] == grade.request_id and int(r["round"]) == grade.round for r in existing
+    ):
+        raise ValueError("Request already reviewed in this round")
+    if grade.answer_grade in {"wrong", "refused_wrongly"} and not grade.failure_stage:
+        raise ValueError("A failed answer requires an explicit failure stage")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    header = not path.exists() or not path.stat().st_size
+    with path.open("a", newline="", encoding="utf-8") as output:
+        writer = csv.DictWriter(output, fieldnames=list(AssistedGrade.model_fields))
+        if header:
+            writer.writeheader()
+        writer.writerow(grade.model_dump())
+
 
 def save_grade(grade: Grade, path: Path) -> None:
+    grade = Grade.model_validate(grade.model_dump())
     needs_header = not path.exists() or path.stat().st_size == 0
     if grade.answer_grade in {"wrong", "refused_wrongly"} and not grade.failure_stage:
         raise ValueError("A failed answer requires an explicit failure stage")

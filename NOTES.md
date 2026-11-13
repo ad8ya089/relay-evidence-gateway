@@ -1258,3 +1258,107 @@ scripts.aggregate --submission; python -m scripts.report; python -m scripts.pack
 python -m scripts.check_submission --structural-only; python -m scripts.check_submission;
 python -m pytest -q; make test PYTHON=.venv/Scripts/python; python -m ruff check .;
 python -m ruff format --check . . Do not rerun the experiment driver over its immutable run root.
+
+## Final master completion at baseline fb4459f
+
+The final master prompt explicitly authorizes assistant preparation/review and a root README
+rewrite. Later style instructions request natural first-person prose. Generated judgments are
+not labelled unaided human work: review records retain assistant provenance and candidate
+confirmation remains pending. Original docs remain unchanged; the previous human-only grading
+CLI is preserved, with a separate AssistedGrade contract that cannot claim human confirmation.
+
+Before edits, results/final_completion/baseline_complete.zip preserved 616 current evidence/package
+files with SHA-256 entries in baseline_manifest.json. An initial archive attempt hit Windows file
+cleanup while a SQLite connection was open; that partial archive is retained and not treated as
+the valid baseline. The completed archive used explicitly closed SQLite online-backup connections.
+All original experiment paths and the 184-file historical inventory remain untouched.
+
+The README was rewritten as explicitly requested. Its exact original bytes are tracked at
+archives/README.fb4459f.md. config/protected_hashes.json is not reset. Instead, the narrowly scoped
+config/authorized_changes.json records old/new README hashes, the preserved copy and the actual
+user authorization. The other 13 protected files remain byte-identical. Submission validation
+accepts only that exact README replacement with the original copy still matching its old hash.
+
+The final question dataset preserves all 18 wordings and IDs. The corrected isolated final key
+adds the Mimi 512-to-256 projection qualification and the conditional F=G ratio-loss qualification.
+Question/source audits and exact source-page/chunk maps are packaged; candidate approval remains
+pending. Default dataset paths now select candidate-final. Exact PDF hashes and page-one version
+stamps were independently rechecked locally for all three pinned documents.
+
+All 54 corrected stand-in outputs were reviewed. The 48 visible answers were materially incomplete
+or unrelated: A 17 wrong, B 18 wrong, C 13 wrong. Six blank timeouts (A 1, C 5) remain uncertain,
+not correct refusals. No correct/refused_correctly/refused_wrongly grades were invented. Actual
+metadata checks are separate from question coverage. The scripted stand-in is a pipeline exerciser,
+so these grades do not measure Groq quality. Authored decisions are bound to the exact raw output
+SHA-256; the publishing helper refuses changed source outputs. Provisional CSV fields append after
+the required original prefix. Human and assistant save paths revalidate their provenance contracts.
+
+A seeded five-output repeat used separate raw-output rationales, with five matching wrong grades.
+The same assistant performed both passes; this is not an independent human-grader reliability
+estimate. Both CSV passes, sample IDs, seed 20261114, disagreements/comparison and limitations are
+preserved. Candidate confirmation and an independent review remain outstanding.
+
+New local runs (all complete; development/uncalibrated):
+- minute-limit binding: p6-c802ffb8e3264065b9b097c3f784539f
+- naive retry repeat: p6-7a98b39a1cc44119aeee664fe2eada03
+- bounded retry repeat: p6-3414e7d0fbd94738833cde6e8ab27aa2
+The minute run set local TPM to 30000, halved it to 15000 at 8 seconds, and observed seven
+projected-wait quota rejections out of twelve requests, with peak queue zero. The repeat pair
+kept workload, seed, schedule, profile, fault configuration and limits equal, with only retry policy
+different. A common one-millisecond timer-period request was restored afterwards; monotonic_ns
+was unchanged. Both lag checks passed (p95 15 ms). Naive success was 1/24 versus bounded 8/24;
+provider calls 37 versus 47, so no claim of increased total calls is made. Realized per-request
+fault draws are not identical because the sampler advances by call sequence; this limitation is
+explicit. All previous runs remain in CSV and per-run diagnostics; tables select later runs rather
+than pooling repeats. The combined CSV has 553 rows; the original P6 CSV still has 84.
+
+The real preflight now counts a shared retry once and includes rejected-completion/repair-envelope
+growth. It reports per-stage reservation estimates, five maximum provider calls per logical request,
+and approximation caveats. Normal real evaluation uses the shared historical results/usage.sqlite3
+ledger instead of isolating daily accounting in a new run ledger; a no-network regression checks
+this path. Existing caps and policy.yaml are unchanged. The complete planned settings still exceed
+the session cap, and candidate final-dataset approval/current exact remaining quota are not recorded.
+No standalone smoke, probe, burst or real evaluation was dispatched. Real ledger remains two calls,
+2084 reported tokens; calibration still has one draft sample and zero verifier samples.
+
+Genuine Limits and Usage screenshots were found in relay-submission/raw; the earlier search missed
+them. Their bytes/metadata are preserved under results/final_completion/account_evidence and in
+the package. Table 1 now uses the displayed organization limits, while historical RPD/TPM header
+observations retain their request timestamps/IDs. Screenshot filenames are dated 2026-11-14, but
+their exact capture times are unverified. The Usage image is a monthly view with a 15-minute delay
+warning, not precise current remaining quota. Screenshot hashes are validated before aggregation.
+
+The public Vaani homepage, developer page, documentation landing page and pricing page were
+reviewed. Natural feedback wording is provided as a draft for candidate approval, without claiming
+product use. Ten genuine supplied prompt attachments are copied verbatim as the brief's prompt
+alternative to unavailable full exports. A relevant original-email browser window was found, but
+the computer-use safety layer could not verify its URL and stopped UI inspection. No further UI
+actions were issued. Submission instructions therefore come from the candidate-supplied prompt.
+The email draft does not claim an unverified Drive upload, form submission or completed experiments.
+
+The package now includes evaluation/, reports/, both screenshot types, source audits, review/regrade
+files, current and earlier manifests, both blocked-smoke manifests, raw records and the final report.
+The PDF is two pages, follows all headings and has been visually checked. Root/submission READMEs,
+an individual brief-requirement audit, email draft and final checklist are supplied. File inventory:
+FINAL_COMPLETION_FILES.txt. Missing evidence/approvals remain BLOCKED, not a falsely green result.
+
+Commands run: scripts.final_local_evidence (new local output root), scripts.final_review (exact-source
+authored review publication), eval.dataset, scripts.prepare_p7, scripts.aggregate --submission,
+scripts.report, scripts.package_submission and scripts.check_submission (structure/readiness).
+README CLI help/startup checks passed for ingestion, service, loadgen, evaluation, grading and API
+--check. Full pytest/make test, Ruff, formatting, targeted provenance/budget/source tests and secret
+scans are recorded in the final verification summary. No mypy configuration exists. Proposed docs
+updates remain unapplied: final dataset paths, explicitly provisional review workflow, shared real
+evaluation ledger and the authorized README preservation exception.
+
+Final checks: full pytest 502 passed in 169.01 s; make test 502 passed in 164.60 s.
+Ruff check passed and format --check reported 193 formatted files. The uv-based dataset command
+also ran successfully. Structural package validation passed with zero errors; readiness remains
+BLOCKED on six uncertain outputs, candidate review/feedback approvals, real A/B/C evidence and
+full calibration. Both PDF pages were checked after the screenshot provenance update.
+The README authorization hash initially differed from its staged Git blob because of CRLF
+normalization. Root README line endings are now explicitly LF in .gitattributes, its recorded hash
+matches both the working file and staged blob, and the archived original is byte-preserved.
+No real calls were added; all 184 historical hashes and 616 archive entries still match. The
+original 84 P6 rows remain byte-identical. Final Git/remote equality and package count follow in
+the delivery response. No mypy result is claimed.
