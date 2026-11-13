@@ -26,6 +26,7 @@ seed: 20261113
 gate_min_score: 0.0
 gate_min_keyword_coverage: 0.25
 gate_min_matching_terms: 1
+broadening_term_max: 12
 numeric_context_chars: 180
 delivery_chunk_chars: 256
 stopwords: [a, an, the, is, are, was, were, what, which, who, how, does, do, did, in, "on", of, to, for, and, or, with, from, according, paper, papers, explain, describe, compare, between, its, it, their, that, this, about, please, me]

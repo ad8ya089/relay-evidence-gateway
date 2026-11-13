@@ -40,6 +40,7 @@ class PipelineSettings(BaseModel):
     gate_min_score: float
     gate_min_keyword_coverage: float = Field(ge=0, le=1)
     gate_min_matching_terms: int = Field(ge=1)
+    broadening_term_max: int = Field(gt=0)
     numeric_context_chars: int = Field(gt=0)
     delivery_chunk_chars: int = Field(gt=0)
     stopwords: list[str]
