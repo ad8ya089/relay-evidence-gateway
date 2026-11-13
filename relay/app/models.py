@@ -145,6 +145,7 @@ class State(StrEnum):
 class CallAttempt(StrictModel):
     call_id: str
     kind: Literal["draft", "verify", "repair"]
+    is_retry: bool = False
     dispatched: bool
     usage: Usage
     usage_complete: bool
@@ -186,7 +187,7 @@ class Outcome(StrictModel):
     draft_calls: int = 0
     verifier_calls: int = 0
     repair_calls: int = 0
-    retries: Literal[0] = 0
+    retries: int = Field(default=0, ge=0)
     tool_retries: int = Field(default=0, ge=0, le=1)
     usage: TokenTotals = Field(default_factory=TokenTotals)
     calls: list[CallAttempt] = Field(default_factory=list)

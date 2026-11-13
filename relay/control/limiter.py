@@ -239,6 +239,19 @@ class Limiter:
             reservation.need = combined
             return True
 
+    async def ensure(self, request_id: str, need: Need) -> bool:
+        async with self.lock:
+            reservation = self.reservations[request_id]
+            required = Need(
+                model=need.model,
+                tokens=max(need.tokens, reservation.need.tokens),
+                requests=max(need.requests, reservation.need.requests),
+            )
+            if self._wait(required, request_id) != 0:
+                return False
+            reservation.need = required
+            return True
+
     async def start_call(self, request_id: str, call_id: str, need: Need) -> None:
         async with self.lock:
             reservation = self.reservations[request_id]

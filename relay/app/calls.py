@@ -2,7 +2,8 @@
 
 import asyncio
 import math
-from typing import Literal
+from collections.abc import Awaitable, Callable
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -40,6 +41,8 @@ class RequestCalls(BaseModel):
     arrival_ns: int
     deadline_ns: int
     attempts: list[CallAttempt] = Field(default_factory=list)
+    retries: int = 0
+    retry_wait_ms: float = 0
 
     def totals(self) -> TokenTotals:
         calls = [c for c in self.attempts if c.dispatched]
@@ -55,6 +58,18 @@ class RequestCalls(BaseModel):
         return TokenTotals.model_validate(totals)
 
 
+class CallExecution(Protocol):
+    async def execute(
+        self,
+        runner: "CallRunner",
+        book: RequestCalls,
+        kind: Literal["draft", "verify", "repair"],
+        messages: list[Message],
+        schema: type[BaseModel],
+    ) -> Invocation: ...
+    async def allow_repair(self, book: RequestCalls) -> bool: ...
+
+
 class CallRunner:
     def __init__(
         self,
@@ -64,6 +79,7 @@ class CallRunner:
         clock: Clock,
         config: PipelineSettings,
         ledger: Ledger | None = None,
+        execution: CallExecution | None = None,
     ) -> None:
         self.provider, self.model, self.clock, self.config, self.ledger = (
             provider,
@@ -72,6 +88,7 @@ class CallRunner:
             config,
             ledger,
         )
+        self.execution = execution
 
     @staticmethod
     def _failure(
@@ -133,6 +150,21 @@ class CallRunner:
         messages: list[Message],
         schema: type[BaseModel],
     ) -> Invocation:
+        if self.execution is not None:
+            return await self.execution.execute(self, book, kind, messages, schema)
+        return await self.invoke_once(book, kind, messages, schema)
+
+    async def invoke_once(
+        self,
+        book: RequestCalls,
+        kind: Literal["draft", "verify", "repair"],
+        messages: list[Message],
+        schema: type[BaseModel],
+        *,
+        attempt: int = 1,
+        token_reservation: int | None = None,
+        before_dispatch: Callable[[LLMRequest], Awaitable[None]] | None = None,
+    ) -> Invocation:
         remaining = (book.deadline_ns - self.clock.monotonic_ns()) / 1e6
         if remaining <= 0:
             return Invocation(failure=ProviderFailure(kind="timeout"))
@@ -152,11 +184,13 @@ class CallRunner:
             else self.config.draft_max_completion_tokens,
             reasoning_effort=self.config.reasoning_effort,
             timeout_ms=max(1, int(budget)),
+            token_reservation=token_reservation,
             metadata=CallMetadata(
                 request_id=book.request_id,
                 run_id=book.run_id,
                 kind=kind,
                 arrival_ns=book.arrival_ns,
+                attempt=attempt,
             ),
         )
         started = self.clock.monotonic_ns()
@@ -165,6 +199,8 @@ class CallRunner:
         try:
             async with timeout_scope:
                 try:
+                    if before_dispatch is not None:
+                        await before_dispatch(request)
                     received = await self.provider.complete(request)
                     if not isinstance(received, LLMResult):
                         raise MalformedProviderResult("Provider returned a malformed result")
@@ -212,6 +248,7 @@ class CallRunner:
             CallAttempt(
                 call_id=request.metadata.call_id,
                 kind=kind,
+                is_retry=attempt > 1,
                 dispatched=dispatched,
                 usage=usage,
                 usage_complete=usage.complete,

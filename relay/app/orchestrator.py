@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from relay.app.calls import CallRunner, Invocation, RequestCalls
+from relay.app.calls import CallExecution, CallRunner, Invocation, RequestCalls
 from relay.app.delivery import _authorize
 from relay.app.gate import EvidenceConflict, broadening_plan, evaluate, merge_results
 from relay.app.interpret import interpret
@@ -74,13 +74,19 @@ class Orchestrator:
         ledger: Ledger | None = None,
         config: PipelineSettings | None = None,
         run_id: str = "p4-local",
+        execution: CallExecution | None = None,
     ) -> None:
         self.clock = clock or SystemClock()
         self.config = config or pipeline_settings()
         self.events, self.executor, self.run_id = events, executor, run_id
         self.prompts = Prompts(self.config)
         self.runner = CallRunner(
-            provider, model, clock=self.clock, config=self.config, ledger=ledger
+            provider,
+            model,
+            clock=self.clock,
+            config=self.config,
+            ledger=ledger,
+            execution=execution,
         )
 
     def _emit(self, run: Run, ev: str, **fields: object) -> None:
@@ -132,9 +138,16 @@ class Orchestrator:
             releasable=releasable,
             citations=rendered.citations if rendered else [],
             claim_citations=rendered.claim_citations if rendered else {},
-            draft_calls=sum(a.kind == "draft" and a.dispatched for a in attempts),
-            verifier_calls=sum(a.kind == "verify" and a.dispatched for a in attempts),
-            repair_calls=sum(a.kind == "repair" and a.dispatched for a in attempts),
+            draft_calls=sum(
+                a.kind == "draft" and a.dispatched and not a.is_retry for a in attempts
+            ),
+            verifier_calls=sum(
+                a.kind == "verify" and a.dispatched and not a.is_retry for a in attempts
+            ),
+            repair_calls=sum(
+                a.kind == "repair" and a.dispatched and not a.is_retry for a in attempts
+            ),
+            retries=run.calls.retries,
             usage=run.calls.totals(),
             tool_retries=run.tool_retries,
             calls=attempts,
@@ -370,6 +383,19 @@ class Orchestrator:
                 releasable=True,
             )
         for generation in range(self.config.repair_max + 1):
+            if (
+                generation
+                and self.runner.execution is not None
+                and not await self.runner.execution.allow_repair(run.calls)
+            ):
+                return self._complete(
+                    run,
+                    State.ABSTAINED,
+                    "error",
+                    text=refusal_text("validation"),
+                    reason="repair_budget_exhausted",
+                    releasable=True,
+                )
             if not await self._draft(run, generation > 0):
                 return self._complete(
                     run,
@@ -492,7 +518,9 @@ class Orchestrator:
                 run,
                 State.TIMED_OUT if timeout else State.FAILED,
                 status,
-                reason="provider_" + failure.kind,
+                reason=str(
+                    failure.safe_context.get("control_reason") or "provider_" + failure.kind
+                ),
             )
         except asyncio.CancelledError:
             outcome = self._complete(run, State.TIMED_OUT, "timeout", reason="cancelled")
