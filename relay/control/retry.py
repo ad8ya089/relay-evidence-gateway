@@ -17,7 +17,13 @@ from relay.control.scheduler import Kind, ProviderScheduler, SchedulerRejected
 from relay.control.settings import RetrySettings
 from relay.obs.clock import Clock
 from relay.obs.events import EventContext, EventWriter, Sanitizer
-from relay.providers.base import LLMRequest, Message, ProviderError, ProviderFailure
+from relay.providers.base import (
+    LLMRequest,
+    Message,
+    ProviderCancelledError,
+    ProviderError,
+    ProviderFailure,
+)
 from relay.providers.errors import header_snapshot
 from relay.retrieval.tokenizer import get_encoding
 
@@ -75,6 +81,7 @@ class RetryController:
         repair_need: Need | None = None,
         safety_tokens: int = 0,
         allow_unsafe_naive: bool = False,
+        on_capacity_change: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         if config.policy == "naive_s7a" and not allow_unsafe_naive:
             raise ValueError("Unsafe S7a retries require explicit enablement")
@@ -86,6 +93,7 @@ class RetryController:
             repair_need,
             safety_tokens,
         )
+        self.on_capacity_change = on_capacity_change
 
     async def allow_repair(self, book: RequestCalls) -> bool:
         if self.limiter is None:
@@ -168,6 +176,9 @@ class RetryController:
                 before_dispatch=prepare,
             )
             return invocation
+        except ProviderCancelledError as exc:
+            invocation = Invocation(failure=exc.info)
+            raise
         except SchedulerRejected:
             return self.denied("deadline_infeasible")
         finally:
@@ -193,6 +204,8 @@ class RetryController:
                         await self.limiter.on_quota_error(
                             runner.model, invocation.failure.kind, invocation.failure.retry_after_ms
                         )
+                    if self.on_capacity_change:
+                        await self.on_capacity_change()
                 if self.breaker:
                     if (
                         attempt_record
@@ -266,6 +279,7 @@ class RetryController:
                 if not await self.limiter.extend(
                     self.reservation_id,
                     Need(model=runner.model, tokens=self.tokens(messages, cap), requests=1),
+                    max_wait_ms=delay,
                 ):
                     return invocation
             if self.events:

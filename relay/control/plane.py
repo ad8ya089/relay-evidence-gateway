@@ -150,6 +150,7 @@ class ControlPlane:
                 repair_need=self.admission.need(setting, self.model, admitted.mode, repair=True),
                 safety_tokens=self.policy.safety_tokens,
                 allow_unsafe_naive=self.allow_unsafe_naive,
+                on_capacity_change=self.admission.wake,
             )
             app = self.factory(self.pipeline_config(admitted.mode), execution)
             outcome = await app.handle(

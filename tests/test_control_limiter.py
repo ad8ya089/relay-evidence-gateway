@@ -143,3 +143,23 @@ async def test_header_remaining_deducts_concurrent_reservations_and_cooldown(
         await limiter.on_quota_error(MODEL, "rate_limit_unknown", 1000)
         assert (await limiter.remaining(MODEL)).retry_after_s is None
         assert await limiter.projected_wait(Need(model=MODEL, tokens=1, requests=1)) is None
+
+
+async def test_larger_provider_limit_cannot_erase_configured_local_ceiling(tmp_path: Path) -> None:
+    c = clock()
+    config = policy()
+    with Ledger(tmp_path / "ledger", clock=c) as ledger:
+        limiter = Limiter(config, ledger, c)
+        await limiter.update_from_headers(
+            MODEL,
+            HeaderSnapshot(
+                observed_ns=0,
+                limit_tokens_tpm=1000000,
+                remaining_tokens_tpm=900000,
+                limit_requests_rpd=100000,
+                remaining_requests_rpd=90000,
+            ),
+        )
+        view = await limiter.remaining(MODEL)
+        assert view.limits.tpm == config.limits[MODEL].tpm
+        assert view.limits.rpd == config.limits[MODEL].rpd

@@ -226,7 +226,7 @@ class Limiter:
             )
             return True
 
-    async def extend(self, request_id: str, need: Need) -> bool:
+    async def extend(self, request_id: str, need: Need, *, max_wait_ms: float = 0) -> bool:
         async with self.lock:
             reservation = self.reservations[request_id]
             combined = Need(
@@ -234,7 +234,8 @@ class Limiter:
                 tokens=reservation.need.tokens + need.tokens,
                 requests=reservation.need.requests + need.requests,
             )
-            if self._wait(combined, request_id) != 0:
+            wait = self._wait(combined, request_id)
+            if wait is None or wait > max_wait_ms:
                 return False
             reservation.need = combined
             return True
@@ -340,6 +341,7 @@ class Limiter:
                         else remaining
                     )
                 if limit is not None and limit > 0:
+                    limit = min(limit, getattr(self.policy.limits[model], scope))
                     if previous and snapshot.observed_ns == previous.observed_ns:
                         limit = min(limit, getattr(self._limits[model], scope))
                     self._limits[model] = self._limits[model].model_copy(update={scope: limit})

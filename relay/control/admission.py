@@ -192,3 +192,7 @@ class Admission:
                 "peak_queue_length": self.peak_queue,
                 "active_logical_requests": len(self.active),
             }
+
+    async def wake(self) -> None:
+        async with self.condition:
+            self.condition.notify_all()
