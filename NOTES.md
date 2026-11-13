@@ -1087,3 +1087,98 @@ scan: 44 files, zero problems. Inventory: 29 created and 15 modified files.
 No real Groq requests, real six-request bursts, real quota probes, API-key lookups
 or automatic answer grading were performed. Git push/remote-HEAD verification and
 the clean-commit measurement repeat are reported with the final P6 commit hash.
+
+## P7 — explicit real integration and evidence-limited submission
+
+The final master prompt supersedes the previous local-only application restriction.
+The original docs, README, questions/gold placeholders and prices remain protected;
+no document was silently rewritten. Provider selection now requires RELAY_PROVIDER=groq,
+RELAY_ALLOW_REAL=1 and explicit --real, with the existing guarded adapter, durable ledger,
+limiter and sealed validation. Stand-in is still the default. No SDK/transport retries,
+new infrastructure or automatic human grades were introduced. Default policy.yaml is unchanged.
+
+Exactly one new real logical smoke was executed, separately from evaluation. Its manifest is
+results/p7/real_smoke/manifest.json; raw calls, outcome, events and exact one-off driver are
+alongside it. Initial estimate 4432 fit the temporary 5000-token/4-call budget. One Groq
+draft returned HTTP 200 using openai/gpt-oss-20b: 1700 prompt and 274 completion tokens,
+including 35 reasoning tokens. Provider duration was 1062 ms, provider first content 1047 ms,
+and sealed user-visible/total observed time 1703 ms. The draft failed quote_not_substring;
+the normal repair budget denied further work (repair_budget_exhausted). No verifier or repair
+ran, no unverified partial answer or citations were released. The visible response was:
+"I couldn't verify a reliable answer from the available paper passages."
+This is guarded integration evidence, not a successful research answer. Both prior blocked
+manifests and original connectivity artifacts remain intact. No further real calls were made.
+
+The raw smoke headers observed request limit 1000, remaining 999, reset 1m26.4s; token
+limit 8000, remaining 5797, reset 16.522s; Retry-After absent. They are historical observations,
+not current quota. Cached usage was absent, so the guard retained a conservative 2530-token
+charge instead of inventing complete usage. The shared ledger has two real attempts overall,
+2084 reported tokens, conservative total charge 2646, no pending attempts. External applications'
+account usage cannot be audited from this local ledger.
+
+Candidate questions are preserved verbatim from the supplied drafts in
+eval/datasets/candidate-v1/questions.jsonl; original answer notes and derived literal source
+anchors are isolated in eval/answer_keys/candidate-v1.jsonl. The protected original empty
+evaluation files were not replaced. All 18 IDs, source/version pins, 12 answerable/6 unanswerable
+distribution and blank grades validate. Actual PDF hashes/version stamps and literal quote
+anchors were checked offline. Full claim entailment, citation quality and grades still require
+human review; source overlap alone is not a correctness grade.
+
+Official real A/B/C evaluation stopped at preflight, without provider creation. Its manifest is
+results/p7/eval/eval-7e7529e115c34519a0918c393f4e4817/manifest.json. Conservative complete-setting
+estimates including possible repairs/retries are 314640/343440/329040 tokens, exceeding the
+existing 60000 session cap. Fresh verified organization daily remaining quota is also absent.
+No real evaluation score is claimed. Local A/B/C workflow execution retained its first 54
+endpoint-error rows and a separate corrected 54-row run. The endpoint regression reproduced
+the defect before the fix. Corrected run: eval-9b4b8fa58b194eb38d479b8cd73dda9b, all ungraded.
+
+Calibration contains one draft TTFT fit, zero verifier samples and no full decode-rate/paired
+distribution fit. The calibration module's broad status does not establish a fully calibrated
+stand-in. All nine official scenario prerequisite checks stopped, retaining manifests/logs;
+no S_dev development capacity was substituted for real service capacity. Official required
+load scenarios and calibrated retry-worsening evidence remain not measured. Three observed
+top-one retrieval mismatches (B01, B02, C03) are documented with actual IDs and limitations in
+P7_RELIABILITY_REVIEW.md and results/p7/retrieval_observations.jsonl.
+
+The isolated P7 CSV contains 193 records: historical 84, both 54-row local runs and one real
+smoke. Only scripts.aggregate calculates tables. Failed runs remain auditable; latest corrected
+evaluation selection is explicit. Missing grades, costs, quota behaviour and official scenario
+measurements are not filled in. Human grading displays actual passages and gold, supports
+explicit grades/regrade rounds and leaves skipped rows blank. A header-only CSV regression
+was observed failing, fixed and rerun. Submission reconciliation also caught a missing computed
+provider-call count in raw conversion, now reconstructed from actual dispatched call records.
+
+results/p7/writeup.pdf has exactly two pages with the template's exact headings, visually reviewed
+on both rendered pages. relay-submission/ is the local ignored deliverable, containing code,
+CSV, raw evidence, original P6 rows/manifests, protected hashes and a file size/hash/provenance
+manifest. Structural validation passes; readiness deliberately blocks for manual grades,
+actual Limits-page PNG, full uncleaned conversation exports, candidate Vaani feedback,
+official real evaluation and calibrated load evidence. No screenshot, transcript, personal
+feedback or manual grade was fabricated. Empty limit_probe.jsonl means no real quota probe.
+
+Reproduction commands (use .venv/Scripts/python or uv run --locked --extra dev python):
+- python -m eval.dataset
+- python -m eval.runner --settings A B C (stand-in only)
+- python -m eval.grade <recorded-evaluation-rows.jsonl> --grades results/p7/grades.csv
+- make p7-results; make pdf; make submission
+- python -m scripts.check_submission --structural-only
+- python -m scripts.check_submission (expected readiness exit 2 until evidence exists)
+- make test; make control-smoke; make pipeline-smoke with separate P7 ledger/events paths
+- make retr-eval EVAL_ARGS=--test-fixtures; make probe; make probe-shapes (dry-run defaults)
+
+Do not rerun the real smoke, real probes or real evaluations to reproduce packaging. Never run
+default P6 results/aggregate commands over preserved outputs; use the isolated P7 targets.
+Mypy is not configured. Proposed docs updates, left unapplied: explicit real application guards,
+candidate-v1 dataset paths, cumulative one-off smoke bounds and structure-versus-readiness checks.
+P7_FILES.txt lists every source file changed since P6. Final test and push evidence follows.
+
+Final verification: full pytest 489 passed in 147.28 s; make test (explicit local virtualenv
+Python) 489 passed in 157.49 s. Ruff check passed; Ruff format --check reported 186 files
+already formatted. Native HTTP control-smoke: 2 passed in 25.05 s. Local pipeline smoke
+released a verified Transformer citation using two stand-in calls. Retrieval fixture checks
+and both probe dry runs passed, explicitly without real requests. Dataset validation returned
+18/12/6; human agreement n=0. Structural submission validation passed with zero errors;
+readiness validation is blocked on the six stated missing evidence categories. Both PDF pages
+were visually inspected. All 14 protected and 184 historical hashes match; original P6 CSV
+has 84 rows, separate P7 CSV has 193. Staged secret/artifact scan found zero problems.
+The final response records the resulting Git HEAD and remote equality after terminal push.

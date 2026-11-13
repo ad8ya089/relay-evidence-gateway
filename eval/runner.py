@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import yaml
 
-from eval.dataset import load_questions
+from eval.dataset import load_questions, validate_dataset
 from relay.app.api import create_local_app
 from relay.app.delivery import iter_validated_answer
 from relay.app.models import Question
@@ -98,6 +98,10 @@ async def run(args: argparse.Namespace) -> Path:
             return root
     if not args.real and not args.base_url:
         raise ValueError("Stand-in evaluation needs an explicit existing loopback --base-url")
+    if not args.real and not args.base_url.rstrip("/").endswith("/openai/v1"):
+        manifest.update(status="blocked", reason="Provider base URL must include /openai/v1")
+        (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        raise ValueError("Provider base URL must include /openai/v1")
     clock = SystemClock()
     writer = EventWriter(root / "rows.jsonl", clock=clock)
     policy_path = Path("config/policy.yaml")
@@ -110,16 +114,21 @@ async def run(args: argparse.Namespace) -> Path:
         data["limits"] = {config["model"]: config["limits"]}
         policy_path = root / "policy.yaml"
         policy_path.write_text(yaml.safe_dump(data))
-    app = create_local_app(
-        policy_path=policy_path,
-        real=args.real,
-        base_url=args.base_url,
-        no_cache=True,
-        ledger_path=root / "usage.sqlite3",
-        cache_path=root / "cache.sqlite3",
-        events_path=root / "events.jsonl",
-        run_id=run_id,
-    )
+    try:
+        app = create_local_app(
+            policy_path=policy_path,
+            real=args.real,
+            base_url=args.base_url,
+            no_cache=True,
+            ledger_path=root / "usage.sqlite3",
+            cache_path=root / "cache.sqlite3",
+            events_path=root / "events.jsonl",
+            run_id=run_id,
+        )
+    except (ValueError, PermissionError, OSError) as exc:
+        manifest.update(status="blocked", reason="Application preflight: " + type(exc).__name__)
+        (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        return root
     try:
         async with app.router.lifespan_context(app):
             plane = app.state.control
@@ -192,6 +201,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--output", type=Path, default=Path("results/p7/eval"))
     args = parser.parse_args()
+    validate_dataset()
     if args.limit is not None and not 1 <= args.limit <= 18:
         parser.error("limit must be 1..18; subsets are never official complete evaluations")
     root = asyncio.run(run(args))

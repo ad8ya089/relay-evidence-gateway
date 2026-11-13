@@ -17,7 +17,7 @@ def selection(policy: Policy, *, real: bool, base_url: str | None) -> tuple[str,
             raise RealCallDenied("Provider selection disagrees with explicit execution mode")
         url = base_url or policy.server.standin_base_url
         if not is_loopback_url(url):
-            raise RealCallDenied("Stand-in selection requires loopback")
+            raise ValueError("Stand-in selection requires loopback")
         return url, None
     if selected != "groq" or safety.provider != "groq" or safety.allow_real != "1" or not real:
         raise RealCallDenied("Groq requires RELAY_PROVIDER=groq, RELAY_ALLOW_REAL=1 and --real")

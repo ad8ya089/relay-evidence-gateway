@@ -8,5 +8,5 @@ draft_cap: 512
 verify_cap: 120
 limits: {rpm: 30, tpm: 8000, rpd: 1000, tpd: 200000}
 output_root: results/p7
-dataset_questions: eval/questions.jsonl
-dataset_gold: eval/gold.jsonl
+dataset_questions: eval/datasets/candidate-v1/questions.jsonl
+dataset_gold: eval/answer_keys/candidate-v1.jsonl

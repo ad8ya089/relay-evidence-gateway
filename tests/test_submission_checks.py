@@ -25,3 +25,11 @@ def test_pdf_page_limit_and_missing_headings_are_reported(tmp_path: Path) -> Non
     issues = pdf_issues(path)
     assert any("two pages" in issue for issue in issues)
     assert any("Missing" in issue for issue in issues)
+
+
+def test_secret_inside_compressed_pdf_is_detected(tmp_path: Path) -> None:
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((40, 40), "gsk_" + "Y" * 32)
+    doc.save(tmp_path / "transcript.pdf", deflate=True)
+    assert secret_findings(tmp_path)

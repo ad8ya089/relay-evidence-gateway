@@ -43,6 +43,9 @@ def convert(raw: dict[str, object], key: dict[str, object]) -> ResultRow:
     ):
         data[field] = usage.get(field)
     data["retries"] = raw.get("retries", 0)
+    data["provider_calls"] = raw.get(
+        "provider_calls", sum(bool(call.get("dispatched")) for call in raw.get("calls", []))
+    )
     data["citation_valid"] = (
         (raw.get("validation") or {}).get("status") == "pass" if raw.get("citations") else None
     )

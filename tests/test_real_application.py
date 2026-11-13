@@ -37,3 +37,30 @@ def test_real_credentials_origin_and_no_fallback(monkeypatch: pytest.MonkeyPatch
 def test_standin_default_never_reads_real_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RELAY_PROVIDER", raising=False)
     assert selection(load_policy(), real=False, base_url=None)[1] is None
+
+
+async def test_real_application_lifecycle_proves_guard_without_dispatch(
+    tmp_path: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pathlib import Path
+
+    from relay.app.api import create_local_app
+
+    if not Path("data/corpus_manifest.json").exists():
+        pytest.skip("Local pinned corpus is not installed")
+    monkeypatch.setenv("RELAY_PROVIDER", "groq")
+    monkeypatch.setenv("RELAY_ALLOW_REAL", "1")
+    monkeypatch.setenv("GROQ_API_KEY", "FAKE-lifecycle-only")
+    path = Path(str(tmp_path))
+    app = create_local_app(
+        real=True,
+        ledger_path=path / "ledger",
+        cache_path=path / "cache",
+        events_path=path / "events",
+    )
+    async with app.router.lifespan_context(app):
+        plane = app.state.control
+        state = await plane.state()
+        assert state["provider_source"] == "real"
+        assert state["real_guard"]["enabled"] and state["real_guard"]["durable"]
+        assert plane.ledger.daily_usage(plane.model).attempts == 0

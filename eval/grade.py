@@ -32,6 +32,7 @@ class Grade(BaseModel):
 
 
 def save_grade(grade: Grade, path: Path) -> None:
+    needs_header = not path.exists() or path.stat().st_size == 0
     if grade.answer_grade in {"wrong", "refused_wrongly"} and not grade.failure_stage:
         raise ValueError("A failed answer requires an explicit failure stage")
     existing = (
@@ -44,20 +45,33 @@ def save_grade(grade: Grade, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", newline="", encoding="utf-8") as output:
         writer = csv.DictWriter(output, fieldnames=list(Grade.model_fields))
-        if not existing:
+        if needs_header:
             writer.writeheader()
         writer.writerow(grade.model_dump())
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("rows", type=Path)
+    parser.add_argument("rows", type=Path, nargs="?")
+    parser.add_argument("--agreement", action="store_true")
     parser.add_argument("--grades", type=Path, default=Path("results/p7/grades.csv"))
     parser.add_argument("--request-id")
     parser.add_argument("--regrade", type=int)
     parser.add_argument("--seed", type=int, default=20261114)
     parser.add_argument("--round", type=int, default=1)
     args = parser.parse_args()
+    if args.agreement:
+        from scripts.aggregate import human_agreement
+
+        if args.grades.exists():
+            with args.grades.open(encoding="utf-8", newline="") as source:
+                grades = [Grade.model_validate(row).model_dump() for row in csv.DictReader(source)]
+        else:
+            grades = []
+        print(json.dumps(human_agreement(grades), indent=2))
+        return 0
+    if args.rows is None:
+        parser.error("Evaluation rows are required unless --agreement is selected")
     rows = [json.loads(line) for line in args.rows.read_text(encoding="utf-8").splitlines()]
     if args.request_id:
         rows = [r for r in rows if r["request_id"] == args.request_id]

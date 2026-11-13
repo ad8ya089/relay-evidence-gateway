@@ -34,6 +34,7 @@ class AnswerKey(BaseModel):
     gold_reference: str = Field(min_length=1)
     evidence_hint: str
     gold_phrases: list[str]
+    evidence_anchors: list[dict[str, object]] = Field(default_factory=list)
     grade: None = None
 
 

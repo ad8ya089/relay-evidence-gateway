@@ -33,6 +33,10 @@ def associate(data: Path = Path("data")) -> dict[str, object]:
                 source = words(chunk.text)
                 match = SequenceMatcher(None, target, source, autojunk=False).find_longest_match()
                 if match.size >= 6:
+                    positions = list(re.finditer(r"\w+", chunk.text))
+                    quote = chunk.text[
+                        positions[match.b].start() : positions[match.b + match.size - 1].end()
+                    ]
                     candidates.append(
                         {
                             "chunk_id": chunk.chunk_id,
@@ -42,6 +46,7 @@ def associate(data: Path = Path("data")) -> dict[str, object]:
                             "section": chunk.section,
                             "page_start": chunk.page_start,
                             "phrase": " ".join(source[match.b : match.b + match.size]),
+                            "quote": quote,
                             "words": match.size,
                         }
                     )
@@ -62,6 +67,20 @@ def hit(texts: list[str], anchors: list[dict[str, object]]) -> bool | None:
     return any(
         str(anchor["phrase"]) in " ".join(words(text)) for text in texts for anchor in anchors
     )
+
+
+def validate_anchors(chunks: dict[str, Chunk], anchors: list[dict[str, object]]) -> None:
+    for anchor in anchors:
+        chunk = chunks.get(str(anchor["chunk_id"]))
+        if chunk is None or not str(anchor["quote"]) or str(anchor["quote"]) not in chunk.text:
+            raise ValueError("Reference quote is not grounded in an actual chunk")
+        if (
+            anchor["arxiv_id"],
+            anchor["arxiv_version"],
+            anchor["section"],
+            anchor["page_start"],
+        ) != (chunk.arxiv_id, chunk.arxiv_version, chunk.section, chunk.page_start):
+            raise ValueError("Reference source/version/page metadata mismatch")
 
 
 if __name__ == "__main__":

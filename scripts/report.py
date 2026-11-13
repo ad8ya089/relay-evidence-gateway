@@ -21,6 +21,7 @@ def headings() -> list[str]:
 
 def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
     tables = json.loads((ROOT / "tables.json").read_text())
+    metrics = json.loads((ROOT / "metrics.json").read_text())
     timeline = json.loads(Path("results/p6_timeline_example.json").read_text())
     texts = [
         "Relay owns interpretation, a retrieval tool, an evidence gate with bounded broadening, "
@@ -46,7 +47,11 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "remain blocked. One unguessed observation: the real smoke was rejected for "
         "quote anchoring, "
         "not an HTTP failure; its full failure record is retained. Load rows have "
-        "blank answer_grade.",
+        "blank answer_grade. "
+        f"The real smoke error share is {metrics['real_smoke']['outcomes']['error']:.1f}%; "
+        "errors complete the outcome percentages. Latest corrected stand-in runs are shown; "
+        "the earlier endpoint-error run remains in CSV and per-run diagnostics. "
+        "Incomplete failed-attempt usage prevents complete token averages.",
         f"Measured fixture-only stand-in request {timeline['request_id']}: "
         f"waiting={timeline['waiting_ms']} ms; "
         f"working={timeline['working_ms']} ms; retrying={timeline['retrying_ms']} ms; "
@@ -72,15 +77,14 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "with candidate answer "
         "notes, not a substitute for human citation support review. Gold references "
         "never enter model requests.",
-        "Candidate hypotheses include attention-role confusion (A01), semantic "
-        "versus acoustic token "
-        "confusion (B02), and model-internal chunking versus PDF/RAG passages "
-        "(C05). Actual retrieved "
-        "chunk IDs and passages are retained in retrieval_observations.jsonl. The "
-        "accompanying review "
-        "identifies observed top-ranked reference mismatches; full retrieval or "
-        "answer-quality failures "
-        "must not be inferred solely from a top-one mismatch.",
+        "Three observed A top-one traps: conversational wording in B01 retrieved "
+        "a misspelling dialogue (moshi-v1-p64-c325, F.2), not system architecture; "
+        "meaning and acoustic-information wording in B02 retrieved an entropy "
+        "dialogue (moshi-v1-p62-c319, F.1), not Mimi's split quantizers; C03's "
+        "training/compression wording retrieved an introductory overview "
+        "(dynamic_chunking-v2-p2-c7), not the smoothing/ratio-loss sections. "
+        "These are ranking mismatches, not proof that the full top-k set or "
+        "final answer failed. A01's top hit was the correct attention section.",
         "One owner enforces bounded retries, jitter, deadlines and the global retry "
         "budget; HTTP retries "
         "are disabled. The real smoke disabled transient retries entirely. Repair "
@@ -120,6 +124,9 @@ def report_parts() -> tuple[list[tuple[str, str]], dict[str, object]]:
         "not measured; neither synthetic capacity nor stand-in latency is presented "
         "as Groq performance.",
     ]
+    feedback = Path("candidate/vaani_feedback.txt")
+    if feedback.is_file() and feedback.read_text(encoding="utf-8").strip():
+        texts[10] = feedback.read_text(encoding="utf-8").strip()
     # Numeric table cells come directly from aggregate.py. Omit optional load rows only for layout.
     selected = {
         "eval_real",

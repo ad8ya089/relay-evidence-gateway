@@ -41,6 +41,13 @@ def build(root: Path = Path("relay-submission")) -> None:
         (Path("results/client_rows.jsonl"), "client_rows.jsonl"),
     ]:
         shutil.copyfile(src, raw / name)
+    shutil.copyfile(Path("results/results.csv"), raw / "p6_results.csv")
+    shutil.copyfile(p7 / "historical_hashes.json", raw / "historical_hashes.json")
+    shutil.copyfile(Path("results/capacity_report.json"), raw / "p6_capacity_report.json")
+    for path in Path("results/runs").glob("*/run_manifest.json"):
+        target = raw / "p6_runs" / path.parent.name / path.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
     events = [
         Path("results/events.jsonl"),
         p7 / "real_smoke/events.jsonl",
@@ -76,6 +83,15 @@ def build(root: Path = Path("relay-submission")) -> None:
                 target = raw / directory / path.relative_to(p7 / directory)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
+    for name in [
+        "reference_associations.json",
+        "retrieval_observations.jsonl",
+        "corpus_verification.json",
+    ]:
+        if (p7 / name).exists():
+            shutil.copyfile(p7 / name, raw / name)
+    if (p7 / "real_smoke/driver.py").exists():
+        shutil.copyfile(p7 / "real_smoke/driver.py", raw / "real_smoke/driver.py")
     (root / "README.md").write_text(
         "# Relay submission - evidence incomplete\n\n"
         "Run code with uv sync --locked --extra dev; make test.\n"

@@ -12,6 +12,9 @@ LOADGEN_ARGS ?=
 CAPACITY_ARGS ?=
 RESULTS_ARGS ?=
 AGGREGATE_ARGS ?=
+SETTING ?= A
+GRADE_ROWS ?=
+GRADE_ARGS ?=
 
 .PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline results development-smoke pipeline-smoke control-smoke
 ingest:
@@ -36,12 +39,23 @@ test:
 	$(PYTHON) -m pytest
 check:
 	$(PYTHON) -m ruff check .
-	$(PYTHON) -m pytest
-	@echo P1-P6 checks: human evaluation and final submission remain P7.
+	$(PYTHON) -m ruff format --check .
+	$(PYTHON) -m scripts.check_submission
 
 # Human evaluation remains P7; local load experiments are P6.
 eval-real:
-	$(PYTHON) -m scripts.pending $@
+	$(PYTHON) -m eval.runner --real --settings $(SETTING) $(EVAL_ARGS)
+eval-standin:
+	$(PYTHON) -m eval.runner --settings $(SETTING) $(EVAL_ARGS)
+grade:
+	$(PYTHON) -m eval.grade $(GRADE_ROWS) $(GRADE_ARGS)
+pdf:
+	$(PYTHON) -m scripts.report
+submission:
+	$(PYTHON) -m scripts.package_submission
+p7-results:
+	$(PYTHON) -m scripts.prepare_p7
+	$(PYTHON) -m scripts.aggregate --submission
 capacity:
 	$(PYTHON) -m loadgen capacity $(CAPACITY_ARGS)
 scenario:
