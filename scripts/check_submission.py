@@ -247,7 +247,9 @@ def main() -> int:
     parser.add_argument("--structural-only", action="store_true")
     args = parser.parse_args()
     result = validate(args.package, readiness=not args.structural_only)
-    Path("results/p7/submission_validation.json").write_text(json.dumps(result, indent=2))
+    report = Path("results/p7/submission_validation.json")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))
     return 0 if result["status"] == "passed" else 2
 
