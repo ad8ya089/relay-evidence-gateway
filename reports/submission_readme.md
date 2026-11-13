@@ -13,6 +13,8 @@ This folder contains the two-page report, source code, results.csv and raw evide
 | `conversation_history/` | Actual supplied prompts; scope described in its README |
 | `artifact_manifest.json` | File hashes, sizes and provenance |
 
-From `code/`, run `uv sync --locked --extra dev`, then `uv run --locked --extra dev python -m pytest`. Start the stand-in and Relay in separate terminals using `code/README.md`.
+From `code/`, run `uv sync --locked --extra dev`. Corpus integration checks require the pinned paper/model assets: follow the ingestion step in `code/README.md` before running `uv run --locked --extra dev python -m pytest`. Those asset downloads do not call Groq. Start the stand-in and Relay in separate terminals using the same README.
+
+From `code/`, `uv run --locked --extra dev python -m scripts.check_submission --package .. --structural-only` recomputes the packaged tables and checks the manifest against the included evidence. Readiness validation intentionally remains blocked where measurements or approvals are missing.
 
 Tables come only from `scripts.aggregate`, the CSV and recorded evidence. Two historical requests reached Groq; the pipeline smoke safely abstained. Real A/B/C quality and complete calibration remain unmeasured. Development runs do not establish Groq capacity. Review records identify the reviewer and distinguish provisional judgments from candidate confirmation. Read `CANDIDATE_ACTIONS.md` before submitting.
