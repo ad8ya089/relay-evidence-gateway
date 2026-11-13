@@ -1,3 +1,79 @@
-# P6 will implement load scenarios.
-status: not implemented
-scenarios: {}
+# Experiment choices; S is measured capacity, never a guessed provider fact.
+status: chosen
+order: [steady, burst, sustained_overload, minute_limit_halved, daily_exhausted, standin_burst6_exact, retry_naive, retry_bounded, burst_cache_on]
+defaults:
+  seed: 20261113
+  profile: scaled
+  setting: C
+  deadline_ms: 8000
+  cache: false
+  sampling: uniform
+  retry_policy: bounded
+  faults: {}
+  admin_events: []
+  policy_overrides: {}
+  fixture_only: false
+  workload: eval/questions.jsonl
+  align_policy_limits: true
+scenarios:
+  steady:
+    label: S1
+    duration_s: 150
+    expected_requests: approximately 100; actual depends on measured S
+    arrivals: {kind: constant, segments: [{duration_s: 150, multiplier: 0.5}]}
+  burst: &burst
+    label: S2
+    duration_s: 105
+    expected_requests: approximately 140; actual depends on measured S
+    arrivals: {kind: burst, segments: [{duration_s: 45, multiplier: 0.5}, {duration_s: 15, multiplier: 4}, {duration_s: 45, multiplier: 0.5}]}
+  sustained_overload:
+    label: S3
+    duration_s: 90
+    expected_requests: approximately 200; inspect overload before an explicitly recorded rerun adjustment
+    arrivals: {kind: constant, segments: [{duration_s: 90, multiplier: 1.75}]}
+  minute_limit_halved:
+    label: S4
+    duration_s: 120
+    expected_requests: 0.8 S for 120 seconds
+    arrivals: {kind: constant, segments: [{duration_s: 120, multiplier: 0.8}]}
+    admin_events: [{offset_s: 40, action: halve_minute_limits, factor: 0.5}]
+  daily_exhausted:
+    label: S5
+    duration_s: 100
+    expected_requests: 0.8 S for 100 seconds
+    arrivals: {kind: constant, segments: [{duration_s: 100, multiplier: 0.8}]}
+    daily_budget_fraction: 0.6
+  standin_burst6_exact:
+    label: S6
+    profile: free_exact
+    duration_s: 0
+    expected_requests: six simultaneous requests
+    arrivals: {kind: one_shot, count: 6}
+  retry_naive: &retry
+    label: S7a
+    duration_s: 90
+    expected_requests: 0.7 S for 90 seconds
+    arrivals: {kind: constant, segments: [{duration_s: 90, multiplier: 0.7}]}
+    retry_policy: naive_s7a
+    faults: {slow_success_prob: 0.15, slow_factor: 8, server_error_prob: 0.03}
+  retry_bounded:
+    <<: *retry
+    label: S7b
+    retry_policy: bounded
+  burst_cache_on:
+    <<: *burst
+    label: S8
+    cache: true
+    sampling: zipf
+  development_smoke:
+    label: fixture-only development smoke
+    profile: development
+    setting: A
+    deadline_ms: 6000
+    duration_s: 0.4
+    expected_requests: eight fixture-only requests including admission rejections
+    arrivals: {kind: constant, segments: [{duration_s: 0.4, rate_per_minute: 1200}]}
+    fixture_only: true
+    workload: tests/fixtures/load_questions.jsonl
+    faults: {server_error_prob: 0, timeout_prob: 0, disconnect_prob: 0, slow_success_prob: 0, verify_fail_prob: 0}
+    policy_overrides: {max_active_requests: 1, queue_capacity: 0, max_inflight_provider: 1}
