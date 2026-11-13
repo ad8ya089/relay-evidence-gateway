@@ -386,7 +386,22 @@ def main() -> int:
     parser.add_argument("--probes", type=Path, default=Path("results/limit_probe.jsonl"))
     parser.add_argument("--limits", type=Path)
     parser.add_argument("--output", type=Path, default=Path("results/tables.md"))
+    parser.add_argument("--submission", action="store_true")
     args = parser.parse_args()
+    if args.submission:
+        root = Path("results/p7")
+        rows = read_csv(root / "results.csv")
+        data, diagnostics = submission_tables(rows)
+        root.joinpath("tables.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+        root.joinpath("metrics.json").write_text(
+            json.dumps(diagnostics, indent=2), encoding="utf-8"
+        )
+        root.joinpath("tables.md").write_text(
+            "\n\n".join(name + "\n\n" + table(t["headers"], t["rows"]) for name, t in data.items()),
+            encoding="utf-8",
+        )
+        print("Generated submission tables from separate validated P7 CSV")
+        return 0
     settings = load_settings()
     rows = read_csv(args.input)  # Explicit input only; never search for stale CSV files.
     prices = yaml.safe_load(args.prices.read_text(encoding="utf-8"))
@@ -409,6 +424,205 @@ def main() -> int:
     )
     print(f"Calculated tables from {len(rows)} validated logical rows")
     return 0
+
+
+def human_agreement(grades: list[dict[str, object]]) -> dict[str, object]:
+    grouped = defaultdict(list)
+    for grade in grades:
+        grouped[grade["request_id"]].append(grade)
+    paired = [
+        sorted(group, key=lambda g: int(g["round"])) for group in grouped.values() if len(group) > 1
+    ]
+    return {
+        "n": len(paired),
+        "agreement": sum(g[0]["answer_grade"] == g[-1]["answer_grade"] for g in paired)
+        / len(paired)
+        if paired
+        else None,
+    }
+
+
+def quality(group: list[ResultRow]) -> dict[str, object]:
+    graded = [r for r in group if r.answer_grade]
+    answerable = [r for r in graded if r.answerable]
+    absent = [r for r in graded if r.answerable is False]
+    return {
+        "asked": len(group),
+        "graded": len(graded),
+        "ungraded": len(group) - len(graded),
+        "answerable": sum(r.answerable is True for r in group),
+        "unanswerable": sum(r.answerable is False for r in group),
+        "correct_pct": sum(r.answer_grade == "correct" for r in graded) * 100 / len(graded)
+        if graded
+        else None,
+        "wrong_pct": sum(r.answer_grade == "wrong" for r in graded) * 100 / len(graded)
+        if graded
+        else None,
+        "answerable_accuracy": sum(r.answer_grade == "correct" for r in answerable)
+        * 100
+        / len(answerable)
+        if answerable
+        else None,
+        "answerable_graded_n": len(answerable),
+        "unanswerable_graded_n": len(absent),
+        "refusal_accuracy": sum(r.answer_grade == "refused_correctly" for r in absent)
+        * 100
+        / len(absent)
+        if absent
+        else None,
+        "overall_accuracy": sum(r.answer_grade in {"correct", "refused_correctly"} for r in graded)
+        * 100
+        / len(graded)
+        if graded
+        else None,
+        "citation_valid_n": sum(r.citation_valid is True for r in group),
+        "citation_observed_n": sum(r.citation_valid is not None for r in group),
+        "retrieval_hit_n": sum(r.retrieval_hit is True for r in group),
+        "retrieval_observed_n": sum(r.retrieval_hit is not None for r in group),
+        "performance": scenario_metrics(group, {}),
+    }
+
+
+def submission_tables(rows: list[ResultRow]) -> tuple[dict[str, object], dict[str, object]]:
+    connectivity = json.loads(Path("results/connectivity/first_real_result.json").read_text())[
+        "observed"
+    ]
+    evidence = limit_evidence([connectivity], {})
+    names = ["Requests per minute", "Tokens per minute", "Requests per day", "Tokens per day"]
+    t1 = [
+        [
+            name,
+            e[1],
+            "Timestamped real response header" if e[1] != UNKNOWN else UNKNOWN,
+            "high for observed header" if e[1] != UNKNOWN else UNKNOWN,
+        ]
+        for name, e in zip(names, evidence, strict=True)
+    ]
+    t1 += [
+        [name, UNKNOWN, UNKNOWN, UNKNOWN]
+        for name in [
+            "Requests in flight at once",
+            "What it returns when a limit is hit",
+            "Time until it recovers",
+        ]
+    ]
+    latency = []
+    outcomes = []
+    diagnostics = {}
+    for name in ["eval_real", "real_burst6", *OFFICIAL, "real_smoke"]:
+        group = [r for r in rows if r.scenario == name and not r.fixture_only]
+        source = "real" if name in {"eval_real", "real_burst6", "real_smoke"} else "stand-in"
+        if not group:
+            latency.append([name, source] + [UNKNOWN] * 5)
+            outcomes.append([name] + [UNKNOWN] * 7)
+            continue
+        m = scenario_metrics(group, {})
+        diagnostics[name] = m
+        latency.append(
+            [
+                name,
+                source,
+                str(m["sent"]),
+                show(
+                    m["duration_s"]
+                    if m["duration_s"] is not None
+                    else group[0].total_ms / 1000
+                    if len(group) == 1
+                    else None
+                ),
+                show(m["offered_per_minute"]),
+                distribution(m["first_token_ms"]),
+                distribution(m["total_ms"]),
+            ]
+        )
+        o = m["outcomes"]
+        outcomes.append(
+            [
+                name,
+                show(o["ok"]),
+                show(o["rate_limited"]),
+                show(o["timeout"]),
+                show(m["retries_per_request"]),
+                show(m["peak_queue"]),
+                f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
+                UNKNOWN,
+            ]
+        )
+    table3 = []
+    evaluation = [r for r in rows if r.record_kind == "eval" and r.question_id]
+    settings = {
+        "A": "256, 6, no",
+        "B": "512, 4, no",
+        "C": "384, 12 to 4, actual rerank in run diagnostics",
+    }
+    for source in ["real", "stand-in"]:
+        for setting in ["A", "B", "C"]:
+            group = [r for r in evaluation if r.source == source and r.retrieval_setting == setting]
+            q = quality(group)
+            m = q["performance"]
+            diagnostics[f"evaluation/{source}/{setting}"] = q
+            table3.append(
+                [
+                    f"{setting}: {settings[setting]} ({source})",
+                    str(q["asked"]),
+                    show(q["correct_pct"]),
+                    show(q["wrong_pct"]),
+                    f"{show(q['refusal_accuracy'])} (graded n={q['unanswerable_graded_n']})",
+                    f"{show(m['tokens_per_answer'])} (n={m['token_denominator']})",
+                    "/".join(show(m["first_token_ms"][f"p{p}"]) for p in [50, 95])
+                    + f" (n={m['first_token_ms']['n']})",
+                    "/".join(show(m["total_ms"][f"p{p}"]) for p in [50, 95])
+                    + f" (n={m['total_ms']['n']})",
+                ]
+            )
+            for paper in ["transformer", "moshi", "dynamic_chunking"]:
+                diagnostics[f"evaluation/{source}/{setting}/{paper}"] = quality(
+                    [r for r in group if r.paper_id == paper]
+                )
+    return {
+        "Table 1: Limits found in the real service": {
+            "headers": ["Limit", "Value you found", "How you found it", "Confidence"],
+            "rows": t1,
+        },
+        "Table 2a: Latency": {
+            "headers": [
+                "Scenario",
+                "Real or stand-in",
+                "Requests sent",
+                "Duration (s)",
+                "Offered rate (/min)",
+                "First token p50 / p95 / p99 (ms)",
+                "Total p50 / p95 / p99 (ms)",
+            ],
+            "rows": latency,
+        },
+        "Table 2b: Outcomes": {
+            "headers": [
+                "Scenario",
+                "Succeeded %",
+                "Rate-limited %",
+                "Timed out or given up %",
+                "Retries per request",
+                "Peak queue length",
+                "Tokens per answer",
+                "Cost per 1,000 answers",
+            ],
+            "rows": outcomes,
+        },
+        "Table 3: Retrieval settings": {
+            "headers": [
+                "Setting (piece size, pieces fetched, re-rank)",
+                "Questions asked",
+                "Correct and cited %",
+                "Wrong %",
+                "Correctly refused %",
+                "Tokens per answer",
+                "First token p50 / p95 (ms)",
+                "Total p50 / p95 (ms)",
+            ],
+            "rows": table3,
+        },
+    }, diagnostics
 
 
 if __name__ == "__main__":

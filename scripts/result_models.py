@@ -22,7 +22,8 @@ AUDIT = (
     "known_counted_tokens scheduled_arrival_monotonic actual_send_monotonic completion_monotonic "
     "generator_lag_ms transport_wait_ms scheduled_arrival_utc question_id answerable record_kind "
     "fixture_only terminal_complete client_status accounting_diagnostics queue_high_water "
-    "peak_duplicate_provider_operations free_allocation server_cleanup_observed arrival_kind"
+    "peak_duplicate_provider_operations free_allocation server_cleanup_observed arrival_kind "
+    "paper_id answer_disposition"
 ).split()
 COLUMNS = REQUIRED + EXTRA + AUDIT
 
@@ -93,6 +94,8 @@ class ResultRow(Model):
     free_allocation: bool | None = None
     server_cleanup_observed: bool | None = None
     arrival_kind: Literal["constant", "step", "burst", "ramp", "one_shot"] | None = None
+    paper_id: str | None = None
+    answer_disposition: Literal["answered", "refused", "failed"] | None = None
 
     _timestamp = field_validator("start_time")(timestamp)
 
