@@ -483,10 +483,13 @@ def quality(group: list[ResultRow]) -> dict[str, object]:
     }
 
 
-def submission_tables(rows: list[ResultRow]) -> tuple[dict[str, object], dict[str, object]]:
-    connectivity = json.loads(Path("results/connectivity/first_real_result.json").read_text())[
-        "observed"
-    ]
+def submission_tables(
+    rows: list[ResultRow], connectivity: dict[str, object] | None = None
+) -> tuple[dict[str, object], dict[str, object]]:
+    connectivity = (
+        connectivity
+        or json.loads(Path("results/connectivity/first_real_result.json").read_text())["observed"]
+    )
     evidence = limit_evidence([connectivity], {})
     names = ["Requests per minute", "Tokens per minute", "Requests per day", "Tokens per day"]
     t1 = [
@@ -556,8 +559,16 @@ def submission_tables(rows: list[ResultRow]) -> tuple[dict[str, object], dict[st
         "C": "384, 12 to 4, actual rerank in run diagnostics",
     }
     for source in ["real", "stand-in"]:
+        source_rows = [r for r in evaluation if r.source == source]
+        latest = max(source_rows, key=lambda r: r.start_time).run_id if source_rows else None
+        diagnostics[f"evaluation/{source}/selected_run"] = latest
+        for run_id in sorted({r.run_id for r in source_rows}):
+            diagnostics[f"evaluation/{source}/run/{run_id}"] = quality(
+                [r for r in source_rows if r.run_id == run_id]
+            )
         for setting in ["A", "B", "C"]:
             group = [r for r in evaluation if r.source == source and r.retrieval_setting == setting]
+            group = [r for r in group if r.run_id == latest]
             q = quality(group)
             m = q["performance"]
             diagnostics[f"evaluation/{source}/{setting}"] = q

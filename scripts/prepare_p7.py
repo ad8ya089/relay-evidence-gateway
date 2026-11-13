@@ -52,7 +52,7 @@ def convert(raw: dict[str, object], key: dict[str, object]) -> ResultRow:
 def build(root: Path = Path("results/p7")) -> list[ResultRow]:
     rows = read_csv(Path("results/results.csv"))
     keys = load_key()
-    for path in sorted((root / "standin_evaluation").glob("eval-*/rows.jsonl")):
+    for path in sorted(root.glob("standin_evaluation*/eval-*/rows.jsonl")):
         for raw in json_rows([path]):
             rows.append(convert(raw, keys[raw["question_id"]].model_dump()))
     smoke = json.loads((root / "real_smoke/outcome.json").read_text())

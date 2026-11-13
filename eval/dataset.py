@@ -62,8 +62,8 @@ def load_key(path: Path = KEY) -> dict[str, AnswerKey]:
     return {r.qid: r for r in rows}
 
 
-def validate_dataset() -> dict[str, object]:
-    questions, keys = load_questions(), load_key()
+def validate_dataset(questions_path: Path = QUESTIONS, key_path: Path = KEY) -> dict[str, object]:
+    questions, keys = load_questions(questions_path), load_key(key_path)
     if {q.qid for q in questions} != set(keys):
         raise ValueError("Question/key IDs differ")
     for q in questions:

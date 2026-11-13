@@ -26,3 +26,4 @@ results/*
 !results/.gitkeep
 config/calibration.json
 config/calibration.json.part
+relay-submission/
