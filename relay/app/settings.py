@@ -43,6 +43,8 @@ class PipelineSettings(BaseModel):
     broadening_term_max: int = Field(gt=0)
     numeric_context_chars: int = Field(gt=0)
     delivery_chunk_chars: int = Field(gt=0)
+    local_startup_timeout_ms: int = Field(gt=0)
+    local_shutdown_timeout_ms: int = Field(gt=0)
     stopwords: list[str]
     section_terms: dict[str, list[str]]
 

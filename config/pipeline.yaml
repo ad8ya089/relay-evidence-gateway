@@ -29,6 +29,8 @@ gate_min_matching_terms: 1
 broadening_term_max: 12
 numeric_context_chars: 180
 delivery_chunk_chars: 256
+local_startup_timeout_ms: 5000
+local_shutdown_timeout_ms: 3000
 stopwords: [a, an, the, is, are, was, were, what, which, who, how, does, do, did, in, "on", of, to, for, and, or, with, from, according, paper, papers, explain, describe, compare, between, its, it, their, that, this, about, please, me]
 section_terms:
   explain: [architecture, method]

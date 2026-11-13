@@ -5,8 +5,10 @@ PROBE_ARGS ?= --dry-run
 PROFILE ?= development
 STANDIN_ARGS ?=
 CALIBRATE_ARGS ?=
+QUESTION ?= Explain encoder-decoder attention
+PIPELINE_ARGS ?= --setting A
 
-.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline
+.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline pipeline-smoke
 ingest:
 	$(PYTHON) -m relay.retrieval.ingest $(INGEST_ARGS)
 retr-eval:
@@ -19,12 +21,14 @@ standin:
 	$(PYTHON) -m standin.service --profile $(PROFILE) $(STANDIN_ARGS)
 calibrate:
 	$(PYTHON) -m standin.calibrate $(CALIBRATE_ARGS)
+pipeline-smoke:
+	$(PYTHON) -m relay.app.smoke --question "$(QUESTION)" $(PIPELINE_ARGS)
 test:
 	$(PYTHON) -m pytest
 check:
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m pytest
-	@echo P1/P2/P3 checks only: full submission checks arrive in P7.
+	@echo P1/P2/P3/P4 checks only: full submission checks arrive in P7.
 
 # P4-P7 stubs: fail explicitly instead of implying success.
 relay eval-real capacity scenario scenarios aggregate timeline:
