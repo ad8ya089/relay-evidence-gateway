@@ -1,0 +1,12 @@
+# One-off choices; organization ceilings are user-reported, not freshly observed quota.
+model: openai/gpt-oss-20b
+question: "In the Transformer, what are the three applications of attention, and how do their query, key and value sources differ?"
+setting: A
+token_cap: 5000
+request_cap: 4
+draft_cap: 512
+verify_cap: 120
+limits: {rpm: 30, tpm: 8000, rpd: 1000, tpd: 200000}
+output_root: results/p7
+dataset_questions: eval/questions.jsonl
+dataset_gold: eval/gold.jsonl
