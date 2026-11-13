@@ -49,6 +49,7 @@ class ControlPlane:
         rng: random.Random | None = None,
         sleep: Sleep = asyncio.sleep,
         allow_unsafe_naive: bool = False,
+        run_id: str = "p5-local",
     ) -> None:
         if not corpus_hash or model not in policy.limits:
             raise ValueError("Known corpus identity and model quota policy required")
@@ -76,6 +77,7 @@ class ControlPlane:
         self.rng, self.sleep = rng or random.Random(policy.retry.seed), sleep
         self.factory = orchestrator_factory or self._orchestrator
         self.allow_unsafe_naive = allow_unsafe_naive
+        self.run_id = run_id
         if policy.retry.policy == "naive_s7a" and not allow_unsafe_naive:
             raise ValueError("Unsafe naive retry demonstration must be explicitly enabled")
 
@@ -89,12 +91,12 @@ class ControlPlane:
             ledger=self.ledger,
             config=config,
             execution=execution,
-            run_id="p5-local",
+            run_id=self.run_id,
         )
 
     def _emit(self, request_id: str, arrival: int, event: str, **fields: object) -> None:
         self.events.write(
-            EventContext(rid=request_id, run="p5-local", arrival_ns=arrival), event, **fields
+            EventContext(rid=request_id, run=self.run_id, arrival_ns=arrival), event, **fields
         )
 
     def pipeline_config(self, mode: Mode) -> PipelineSettings:
@@ -208,6 +210,8 @@ class ControlPlane:
             question.request_id,
             arrival,
             "arrived",
+            server_arrival_monotonic=arrival,
+            inflight=(await self.scheduler.snapshot()).inflight,
             mode=await self.admission.mode(self.model),
             **await self.admission.snapshot(),
         )
@@ -286,7 +290,26 @@ class ControlPlane:
                 "breaker": (await self.breaker.snapshot(model)).model_dump(),
                 "mode": await self.admission.mode(model),
             }
+        from relay.app.text import digest
+        from relay.providers.guard import RealCallGuard
+
+        guard = getattr(self.provider, "guard", None)
+        proof = {"enabled": False, "permitted": False, "durable": False}
+        if isinstance(guard, RealCallGuard):
+            proof = {
+                "enabled": True,
+                "permitted": guard.settings.allow_real == "1" and guard.real_permission,
+                "durable": guard.ledger is self.ledger,
+                "remaining_requests": max(
+                    0, guard.settings.real_request_cap - guard.requests_reserved
+                ),
+                "remaining_tokens": max(0, guard.settings.real_token_cap - guard.tokens_reserved),
+            }
         return {
+            "model": self.model,
+            "provider_source": "real" if getattr(self.provider, "is_real", False) else "stand-in",
+            "real_guard": proof,
+            "policy_fingerprint": digest(self.policy.model_dump()),
             "mode": await self.admission.mode(self.model),
             **await self.admission.snapshot(),
             "provider": (await self.scheduler.snapshot()).model_dump(),

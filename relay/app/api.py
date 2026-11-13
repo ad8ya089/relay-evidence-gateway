@@ -144,7 +144,7 @@ def create_app(
 
         def client_gone() -> None:
             plane.events.write(
-                EventContext(rid=rid, run="p5-local", arrival_ns=arrival),
+                EventContext(rid=rid, run=plane.run_id, arrival_ns=arrival),
                 "client_disconnected",
                 phase="preparing",
             )
@@ -255,6 +255,8 @@ def create_local_app(
     cache_path: Path = Path("results/relay_cache.sqlite3"),
     events_path: Path = Path("results/events.jsonl"),
     allow_unsafe_naive: bool = False,
+    run_id: str = "p5-local",
+    model: str | None = None,
 ) -> FastAPI:
     policy = load_policy(policy_path)
     if no_cache:
@@ -270,7 +272,7 @@ def create_local_app(
     manifest = CorpusManifest.model_validate_json(
         Path("data/corpus_manifest.json").read_text(encoding="utf-8")
     )
-    model = load_profile("development").model
+    model = model or load_profile("development").model
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -312,6 +314,7 @@ def create_local_app(
                     retry_budget=RetryBudget(policy.retry),
                     breaker=breaker,
                     allow_unsafe_naive=allow_unsafe_naive,
+                    run_id=run_id,
                 )
                 try:
                     yield

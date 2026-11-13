@@ -134,8 +134,20 @@ class RetryController:
         need = Need(model=runner.model, tokens=self.tokens(messages, cap), requests=1)
         tracked: list[str] = []
         invocation: Invocation | None = None
+        granted = self.clock.monotonic_ns()
 
         async def prepare(request: LLMRequest) -> None:
+            if self.events:
+                self.events.write(
+                    EventContext(rid=book.request_id, run=book.run_id, arrival_ns=book.arrival_ns),
+                    "provider_wait",
+                    call_id=request.metadata.call_id,
+                    kind=kind,
+                    attempt=attempt,
+                    start_ms=(started - book.arrival_ns) / 1e6,
+                    end_ms=(granted - book.arrival_ns) / 1e6,
+                    duration_ms=(granted - started) / 1e6,
+                )
             if self.clock.monotonic_ns() >= book.deadline_ns:
                 raise ProviderError(
                     ProviderFailure(kind="timeout", safe_context={"dispatched": False})
@@ -164,6 +176,7 @@ class RetryController:
         try:
             await slot.__aenter__()
             entered = True
+            granted = self.clock.monotonic_ns()
             if self.breaker and not await self.breaker.allow(runner.model, book.request_id):
                 return self.denied("breaker_open")
             invocation = await runner.invoke_once(
@@ -259,6 +272,16 @@ class RetryController:
             async def operation(attempt: int) -> Invocation:
                 if attempt > 1:
                     book.retries += 1
+                    if self.events:
+                        self.events.write(
+                            EventContext(
+                                rid=book.request_id, run=book.run_id, arrival_ns=book.arrival_ns
+                            ),
+                            "retry_attempt",
+                            attempt=attempt,
+                            kind=kind,
+                            policy="naive_s7a",
+                        )
                 return await self._once(runner, book, kind, messages, schema, attempt)
 
             naive = self.config.model_copy(
@@ -319,12 +342,33 @@ class RetryController:
                     budget=await self.budget.snapshot(),
                 )
             before = self.clock.monotonic_ns()
-            await self.sleep(delay / 1000)
-            book.retry_wait_ms += (self.clock.monotonic_ns() - before) / 1e6
+            try:
+                await self.sleep(delay / 1000)
+            finally:
+                ended = self.clock.monotonic_ns()
+                book.retry_wait_ms += (ended - before) / 1e6
+                if self.events:
+                    self.events.write(
+                        EventContext(
+                            rid=book.request_id, run=book.run_id, arrival_ns=book.arrival_ns
+                        ),
+                        "retry_wait",
+                        start_ms=(before - book.arrival_ns) / 1e6,
+                        end_ms=(ended - book.arrival_ns) / 1e6,
+                        duration_ms=(ended - before) / 1e6,
+                    )
             if self.clock.monotonic_ns() >= book.deadline_ns:
                 return invocation
             book.retries += 1
             attempt += 1
+            if self.events:
+                self.events.write(
+                    EventContext(rid=book.request_id, run=book.run_id, arrival_ns=book.arrival_ns),
+                    "retry_attempt",
+                    attempt=attempt,
+                    kind=kind,
+                    policy="bounded",
+                )
 
 
 class NaiveRetryPolicy:

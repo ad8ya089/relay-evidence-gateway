@@ -76,6 +76,9 @@ class Simulation:
         self.stats: Counter[str] = Counter()
         self.fault_counts: Counter[str] = Counter()
         self.decisions: deque[Decision] = deque(maxlen=profile.diagnostic_history.value)
+        self.sampling_audit: deque[dict[str, object]] = deque(
+            maxlen=profile.diagnostic_history.value
+        )
         self.last_admin_update: dict[str, object] | None = None
 
     def begin(self, request: LLMRequest) -> Prepared:
@@ -92,6 +95,12 @@ class Simulation:
                 request.max_completion_tokens,
                 use_calibration=model == profile.model,
             )
+            audit = {
+                "decision": decision.model_dump(),
+                "disposition": "invalid_input",
+                "observed_monotonic": self.clock.monotonic_ns(),
+            }
+            self.sampling_audit.append(audit)
             text = generate(request.messages, verify_fail=decision.verify_fail)
             visible_tokens = len(get_encoding().encode(text))
             if visible_tokens > request.max_completion_tokens:
@@ -106,9 +115,12 @@ class Simulation:
                 model, profile.models[model], tokens_in - cached + request.max_completion_tokens
             )
             if not admission.accepted:
+                audit["disposition"] = "quota_rejected"
                 self.stats["rejected"] += 1
                 raise QuotaRejected(admission)
             assert admission.charge_id is not None
+            audit["disposition"] = "accepted"
+            audit["completion_id"] = f"sim-{profile.seed.value}-{admission.charge_id}"
             self.active.add(admission.charge_id)
             self.inflight += 1
             self.stats["accepted"] += 1
@@ -172,6 +184,7 @@ class Simulation:
                 "cache": self.cache.state(),
                 "last_admin_update": self.last_admin_update,
                 "decisions": [d.model_dump() for d in self.decisions],
+                "sampling_audit": list(self.sampling_audit),
             }
 
     def response_headers(self, model: str) -> dict[str, str]:

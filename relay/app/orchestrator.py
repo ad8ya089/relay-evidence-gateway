@@ -103,8 +103,16 @@ class Orchestrator:
             raise PipelineDeadline("Logical request deadline expired")
 
     def _timing(self, run: Run, stage: str, started: int) -> None:
-        run.stage_ms[stage] = (
-            run.stage_ms.get(stage, 0) + (self.clock.monotonic_ns() - started) / 1e6
+        ended = self.clock.monotonic_ns()
+        elapsed = (ended - started) / 1e6
+        run.stage_ms[stage] = run.stage_ms.get(stage, 0) + elapsed
+        self._emit(
+            run,
+            "stage_timing",
+            stage=stage,
+            start_ms=(started - run.calls.arrival_ns) / 1e6,
+            end_ms=(ended - run.calls.arrival_ns) / 1e6,
+            duration_ms=elapsed,
         )
 
     def _snapshot(
@@ -337,6 +345,7 @@ class Orchestrator:
             run.validation = None
             return False
         self._move(run, State.VALIDATING)
+        validation_started = self.clock.monotonic_ns()
         run.validation = (
             validate_evidence(run.draft, run.retrieval.hits, self.config)
             if run.draft
@@ -344,6 +353,7 @@ class Orchestrator:
                 status="fail_repairable", repairable=True, failure_reason="draft_schema_invalid"
             )
         )
+        self._timing(run, "deterministic_validation", validation_started)
         if run.validation.deterministic_passed:
             self._check(run)
             assert run.draft is not None

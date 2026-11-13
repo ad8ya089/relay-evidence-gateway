@@ -100,6 +100,7 @@ def admin_router(simulation: Simulation) -> APIRouter:
             simulation.profile = replacement
             simulation.sampler = Sampler(replacement)
             simulation.decisions = deque(maxlen=replacement.diagnostic_history.value)
+            simulation.sampling_audit = deque(maxlen=replacement.diagnostic_history.value)
             simulation.cache.reset()
             return updated("profile")
 
@@ -117,6 +118,7 @@ def admin_router(simulation: Simulation) -> APIRouter:
             simulation.stats.clear()
             simulation.fault_counts.clear()
             simulation.decisions.clear()
+            simulation.sampling_audit.clear()
             return updated("reset")
 
     return router
