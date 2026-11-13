@@ -127,6 +127,7 @@ class Citation(StrictModel):
 
 class State(StrEnum):
     ARRIVED = "ARRIVED"
+    CACHE_HIT = "CACHE_HIT"
     INTERPRETED = "INTERPRETED"
     RETRIEVED = "RETRIEVED"
     GATE = "GATE"
@@ -174,6 +175,8 @@ class TokenTotals(StrictModel):
 
 class Outcome(StrictModel):
     request_id: str
+    cache_hit: bool = False
+    coalesced: bool = False
     run_id: str
     text: str = ""
     citations: list[Citation] = Field(default_factory=list)

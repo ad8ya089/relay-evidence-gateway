@@ -27,7 +27,7 @@ def _fingerprint(outcome: Outcome) -> str:
 def _authorize(outcome: Outcome) -> None:
     if not outcome.releasable or not outcome.text:
         raise DeliveryError("No releasable response")
-    if outcome.state == State.RELEASED:
+    if outcome.state in {State.RELEASED, State.CACHE_HIT} and not outcome.validated_refusal:
         if not (
             outcome.validation
             and outcome.validation.status == "pass"
@@ -36,6 +36,9 @@ def _authorize(outcome: Outcome) -> None:
             and outcome.citations
         ):
             raise DeliveryError("Answer lacks completed validation")
+    elif outcome.state == State.CACHE_HIT and outcome.validated_refusal:
+        if outcome.text not in {refusal_text("local"), refusal_text("model")}:
+            raise DeliveryError("Invalid cached refusal")
     elif outcome.state == State.REFUSED_LOCAL:
         if not outcome.validated_refusal or outcome.text != refusal_text("local"):
             raise DeliveryError("Invalid local refusal")
@@ -48,6 +51,10 @@ def _authorize(outcome: Outcome) -> None:
     else:
         raise DeliveryError("Pipeline has not reached a releasable state")
     outcome._delivery_seal = _fingerprint(outcome)
+
+
+def approved(outcome: Outcome) -> bool:
+    return outcome._delivery_seal is not None and outcome._delivery_seal == _fingerprint(outcome)
 
 
 async def iter_validated_answer(
