@@ -53,3 +53,5 @@ server:
   port: 8080
   disconnect_poll_ms: 50
   graceful_shutdown_s: 5
+  request_id_max_chars: 128
+  standin_base_url: http://127.0.0.1:8081/openai/v1

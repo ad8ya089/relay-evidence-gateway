@@ -80,6 +80,8 @@ class ServerSettings(PolicyModel):
     port: int = Field(ge=0, le=65535)
     disconnect_poll_ms: int = Field(gt=0)
     graceful_shutdown_s: int = Field(gt=0)
+    request_id_max_chars: int = Field(gt=0)
+    standin_base_url: str
 
 
 class Policy(PolicyModel):

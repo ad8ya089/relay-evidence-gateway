@@ -7,6 +7,7 @@ STANDIN_ARGS ?=
 CALIBRATE_ARGS ?=
 QUESTION ?= Explain encoder-decoder attention
 PIPELINE_ARGS ?= --setting A
+RELAY_ARGS ?= --no-cache
 
 .PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline pipeline-smoke
 ingest:
@@ -23,13 +24,15 @@ calibrate:
 	$(PYTHON) -m standin.calibrate $(CALIBRATE_ARGS)
 pipeline-smoke:
 	$(PYTHON) -m relay.app.smoke --question "$(QUESTION)" $(PIPELINE_ARGS)
+relay:
+	$(PYTHON) -m relay.app.api $(RELAY_ARGS)
 test:
 	$(PYTHON) -m pytest
 check:
 	$(PYTHON) -m ruff check .
 	$(PYTHON) -m pytest
-	@echo P1/P2/P3/P4 checks only: full submission checks arrive in P7.
+	@echo P1-P5 checks only: full submission checks arrive in P7.
 
-# P4-P7 stubs: fail explicitly instead of implying success.
-relay eval-real capacity scenario scenarios aggregate timeline:
+# P6-P7 stubs: fail explicitly instead of implying success.
+eval-real capacity scenario scenarios aggregate timeline:
 	$(PYTHON) -m scripts.pending $@
