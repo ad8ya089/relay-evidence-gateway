@@ -6,7 +6,7 @@ import pytest
 from relay.control.ledger import CallRecord, Ledger
 from relay.control.limiter import Limiter, Need
 from relay.control.settings import Policy, load_policy
-from relay.providers.base import Usage
+from relay.providers.base import HeaderSnapshot, Usage
 from tests.standin_helpers import clock
 
 MODEL = "openai/gpt-oss-20b"
@@ -85,3 +85,61 @@ def test_invalid_policy_fails_startup() -> None:
         policy(queue_capacity=-1)
     with pytest.raises(ValueError):
         policy(pressure=load_policy().normal.model_dump())
+
+
+async def test_out_of_order_headers_cannot_restore_capacity_or_old_limits(tmp_path: Path) -> None:
+    c = clock()
+    with Ledger(tmp_path / "ledger", clock=c) as ledger:
+        limiter = Limiter(policy(), ledger, c)
+        c.advance_ms(10)
+        newer = HeaderSnapshot(
+            observed_ns=c.monotonic_ns(),
+            limit_tokens_tpm=100,
+            remaining_tokens_tpm=20,
+            limit_requests_rpd=400,
+            remaining_requests_rpd=8,
+            headers={"x-ratelimit-reset-tokens": "2s"},
+        )
+        older = newer.model_copy(
+            update={"observed_ns": 0, "limit_tokens_tpm": 1000, "remaining_tokens_tpm": 900}
+        )
+        await limiter.update_from_headers(MODEL, newer)
+        await limiter.update_from_headers(MODEL, older)
+        view = await limiter.remaining(MODEL)
+        assert view.limits.tpm == 100 and view.tpm == 20 and view.rpd == 8
+        assert view.limits.rpm == policy().limits[MODEL].rpm
+        assert view.limits.tpd == policy().limits[MODEL].tpd
+        c.advance_ms(1)
+        await limiter.update_from_headers(
+            MODEL,
+            newer.model_copy(
+                update={
+                    "observed_ns": c.monotonic_ns(),
+                    "limit_tokens_tpm": 50,
+                    "remaining_tokens_tpm": 40,
+                }
+            ),
+        )
+        assert (await limiter.remaining(MODEL)).tpm == 20
+        assert (await limiter.remaining(MODEL)).limits.tpm == 50
+        c.advance_ms(2001)
+        assert (await limiter.remaining(MODEL)).tpm == 50
+
+
+async def test_header_remaining_deducts_concurrent_reservations_and_cooldown(
+    tmp_path: Path,
+) -> None:
+    c = clock()
+    with Ledger(tmp_path / "ledger", clock=c) as ledger:
+        limiter = Limiter(policy(), ledger, c)
+        assert await limiter.reserve("inflight", Need(model=MODEL, tokens=15, requests=1))
+        await limiter.update_from_headers(
+            MODEL, HeaderSnapshot(observed_ns=0, remaining_tokens_tpm=20)
+        )
+        assert (await limiter.remaining(MODEL)).tpm == 5
+        assert not await limiter.reserve("other", Need(model=MODEL, tokens=10, requests=1))
+        await limiter.on_quota_error(MODEL, "rate_limit_minute", 1000)
+        assert await limiter.projected_wait(Need(model=MODEL, tokens=1, requests=1)) == 1000
+        await limiter.on_quota_error(MODEL, "rate_limit_unknown", 1000)
+        assert (await limiter.remaining(MODEL)).retry_after_s is None
+        assert await limiter.projected_wait(Need(model=MODEL, tokens=1, requests=1)) is None
