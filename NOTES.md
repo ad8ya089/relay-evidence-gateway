@@ -663,3 +663,31 @@ distinction between successful evidence refusal and validation abstention was
 resolved from the existing design, without changing docs. Proposed later doc
 clarifications: make the handle-versus-delivery timing boundary explicit, and
 document cold model startup separately from the per-request deadline.
+
+# P5 integration contract (13 November 2026)
+
+Starting main and origin/main: 34376c725abaef97fe139abd2f4c7df05caca887,
+clean tree. The unchanged baseline passed 322 tests before P5 edits.
+The P5 request explicitly supersedes overwrite-only quota reconciliation and
+the older wording that locates retry policy inside Orchestrator: control/retry.py
+owns provider retries, injected into P4 CallRunner. P4's local tool retry stays
+separate. No original document is changed.
+
+Actual P4 handle accepts string/Question plus setting/request_id/deadline_ms.
+It owns validation and its private delivery seal. CallRunner.invoke owns one
+provider attempt and its ledger reconciliation; the integration will retain
+that one-attempt implementation and inject a central execution wrapper. Each
+attempt needs a unique CallMetadata.call_id, a shared logical request ID, and
+the remaining absolute deadline. Provider.complete returns HeaderSnapshot with
+monotonic observed_ns; failures carry headers_observed_ns in safe_context.
+P2 writes/finalizes SQLite calls before returning or raising cancellation.
+Ledger.daily_usage(model, real=False) exposes known/unknown/pending usage and
+conservative guard charges; P5 must not insert a second actual-usage row.
+
+P3 development is a loopback FastAPI factory with injected clock/RNG/sleep.
+Its public model and limits remain simulated choices, not account observations.
+P1 search_papers already accepts top_k and numeric adjacency. Pressure mode
+will bound the final supplied evidence after merges/adjacency as well as top_k.
+P4 prefixes/markers, quote/number checks and metadata rendering remain unchanged.
+Cache persistence needs a separately owned SQLite table; loading a serialized
+Outcome cannot by itself restore P4's private validation approval.

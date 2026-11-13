@@ -1,3 +1,55 @@
-# P1 safety defaults; admission/retry policies belong to P5.
+# Local engineering choices, NOT measured Groq/account limits.
 provider: standin
 status: assumed
+deadline_ms: 8000
+max_queue_wait_ms: 3000
+queue_capacity: 20
+max_active_requests: 4
+max_inflight_provider: 4
+max_inflight_real: 2
+window_s: 60
+daily_reset_known: true  # Local UTC budget/P3 reset only.
+limits:
+  openai/gpt-oss-20b: {rpm: 120, tpm: 100000, rpd: 20000, tpd: 2000000}
+estimates:
+  A: {draft_input: 2600, verify_input: 900, expected_service_ms: 3000}
+  B: {draft_input: 3000, verify_input: 900, expected_service_ms: 3000}
+  C: {draft_input: 2800, verify_input: 900, expected_service_ms: 5000}
+normal: {top_k: null, draft_max_completion_tokens: 450, verify_max_completion_tokens: 120, repair_max: 1}
+pressure: {top_k: 3, draft_max_completion_tokens: 280, verify_max_completion_tokens: 120, repair_max: 0}
+pressure_minute_util: 0.70
+pressure_day_util: 0.80
+safety_tokens: 300
+retry:
+  policy: bounded
+  max_per_request: 1
+  budget_fraction: 0.10
+  budget_capacity: 10
+  base_backoff_ms: 200
+  max_backoff_ms: 1000
+  safety_margin_ms: 1500
+  seed: 20261113
+  naive_timeout_ms: 1500
+  naive_retries: 3
+breaker:
+  consecutive_failures: 5
+  failure_window_ms: 20000
+  open_ms: 5000
+  count_minute_429: false
+cache:
+  enabled: false
+  ttl_s: 7200
+  max_entries: 1000
+  singleflight: true
+  max_waiters: 100
+  prompt_version: RELAY_DRAFT_V1+RELAY_VERIFY_V1-P5
+scheduler:
+  priorities: {verify: 0, repair: 1, draft: 2}
+  max_waiters: 100
+  aging_ms: 2000
+  max_priority_burst: 8
+server:
+  host: 127.0.0.1
+  port: 8080
+  disconnect_poll_ms: 50
+  graceful_shutdown_s: 5
