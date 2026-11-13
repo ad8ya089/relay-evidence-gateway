@@ -173,6 +173,10 @@ def build(root: Path = Path("relay-submission")) -> None:
             shutil.copy2(path, raw / path.name)
     for path in final.glob("*.json"):
         shutil.copyfile(path, root / "reports" / path.name)
+    for path in Path("results/submission_delivery/preflight").glob("*/manifest.json"):
+        dest = raw / "submission_preflight" / path.parent.name / path.name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, dest)
     files = [
         {
             "path": str(p.relative_to(root)).replace("\\", "/"),

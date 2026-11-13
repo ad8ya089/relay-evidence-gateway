@@ -5,9 +5,11 @@ import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 import yaml
+from pydantic import AwareDatetime, BaseModel, Field, ValidationError
 
 from eval.dataset import load_questions, validate_dataset
 from relay.app.api import create_local_app
@@ -17,6 +19,14 @@ from relay.control.settings import load_policy
 from relay.obs.clock import SystemClock
 from relay.obs.events import EventContext, EventWriter
 from relay.settings import SafetySettings
+
+
+class QuotaEvidence(BaseModel):
+    observed_at_utc: AwareDatetime
+    model: Literal["openai/gpt-oss-20b"]
+    provenance: Literal["verified account observation"]
+    remaining_tpd: float = Field(ge=0, allow_inf_nan=False)
+    remaining_tpm: float = Field(ge=0, allow_inf_nan=False)
 
 
 def real_plan(
@@ -51,19 +61,18 @@ def real_plan(
     if not evidence:
         reasons.append("Fresh verified organization remaining quota is not supplied")
     else:
-        observed = datetime.fromisoformat(str(evidence["observed_at_utc"]))
-        age = (datetime.now(UTC) - observed).total_seconds()
-        if observed.utcoffset() is None or not 0 <= age <= policy.window_s:
-            reasons.append("Quota evidence is stale or future-dated")
-        if (
-            evidence.get("model") != "openai/gpt-oss-20b"
-            or evidence.get("provenance") != "verified account observation"
-        ):
-            reasons.append("Quota evidence lacks matching verified model provenance")
-        if worst > float(evidence.get("remaining_tpd", 0)) * 0.7:
-            reasons.append("Run exceeds 70% of verified remaining daily tokens")
-        if initial > float(evidence.get("remaining_tpm", 0)):
-            reasons.append("Initial pair does not fit observed minute quota")
+        try:
+            quota = QuotaEvidence.model_validate(evidence)
+        except ValidationError:
+            reasons.append("Quota evidence is malformed or lacks verified model provenance")
+        else:
+            age = (datetime.now(UTC) - quota.observed_at_utc).total_seconds()
+            if not 0 <= age <= policy.window_s:
+                reasons.append("Quota evidence is stale or future-dated")
+            if worst > quota.remaining_tpd * 0.7:
+                reasons.append("Run exceeds 70% of verified remaining daily tokens")
+            if initial > quota.remaining_tpm:
+                reasons.append("Initial pair does not fit observed minute quota")
     return {
         "setting": setting,
         "questions": count,
@@ -87,6 +96,7 @@ def real_plan(
 
 async def run(args: argparse.Namespace) -> Path:
     questions = load_questions()  # This file contains no gold facts or answerability.
+    questions = questions[: args.limit]
     run_id = "eval-" + uuid4().hex
     root = args.output / run_id
     root.mkdir(parents=True, exist_ok=False)
@@ -103,7 +113,12 @@ async def run(args: argparse.Namespace) -> Path:
         "plans": [],
     }
     if args.real:
-        evidence = json.loads(args.quota_evidence.read_text()) if args.quota_evidence else None
+        try:
+            evidence = json.loads(args.quota_evidence.read_text()) if args.quota_evidence else None
+        except (OSError, ValueError):
+            manifest.update(status="blocked", reason="Quota evidence file is unreadable or invalid")
+            (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
+            return root
         manifest["plans"] = [real_plan(s, len(questions), evidence) for s in args.settings]
         if len(args.settings) != 1 or any(p["status"] != "ready" for p in manifest["plans"]):
             manifest["status"] = "blocked"
@@ -149,7 +164,7 @@ async def run(args: argparse.Namespace) -> Path:
         async with app.router.lifespan_context(app):
             plane = app.state.control
             for setting in args.settings:
-                for q in questions[: args.limit]:
+                for q in questions:
                     started = clock.monotonic_ns()
                     stamp = clock.utc_now().isoformat(timespec="milliseconds")
                     outcome = await plane.ask(

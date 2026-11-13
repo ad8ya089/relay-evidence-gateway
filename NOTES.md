@@ -1362,3 +1362,19 @@ matches both the working file and staged blob, and the archived original is byte
 No real calls were added; all 184 historical hashes and 616 archive entries still match. The
 original 84 P6 rows remain byte-identical. Final Git/remote equality and package count follow in
 the delivery response. No mypy result is claimed.
+
+Delivery follow-up: the candidate supplied the actual hiring email and then asked for
+the Drive folder only, taking over upload. Created and read back that private folder;
+the email draft includes its observed URL. No upload, public permission or form
+submission is claimed. The in-app Groq console returned access denied and the form
+required sign-in. Browser account access did not include the connected Drive owner.
+
+Rechecked the shared ledger: two historical attempts, 2,084 reported tokens, latest
+2026-11-13T19:01:43.139883+00:00. The full A/B/C preflight stopped before creating a
+provider client; preserved its new blocked manifest. No caps or policy defaults changed.
+Fixed subset preflight counting and fail-closed malformed quota evidence handling;
+nine new offline regressions pass. Full pytest: 511 passed in 98.32 s. make test:
+511 passed in 108.32 s. Ruff passed; 194 files formatted. The previous package was
+preserved in results/submission_delivery/relay-submission-before-delivery.zip before
+rebuilding. Experimental readiness remains blocked; no missing grade or calibration
+measurement has been invented.
