@@ -5,6 +5,7 @@ import re
 from pydantic import ValidationError
 
 from relay.app.models import ClaimCheck, Draft, ValidationResult
+from relay.app.numeric import numeric_errors
 from relay.app.settings import PipelineSettings, pipeline_settings
 from relay.app.text import normalize
 from relay.retrieval.models import RetrievalHit
@@ -40,6 +41,12 @@ def validate_evidence(
     draft: Draft, supplied: list[RetrievalHit], config: PipelineSettings | None = None
 ) -> ValidationResult:
     config = config or pipeline_settings()
+    try:
+        draft = Draft.model_validate(draft.model_dump())
+    except ValidationError:
+        return ValidationResult(
+            status="fail_repairable", repairable=True, failure_reason="draft_schema_invalid"
+        )
     if draft.status != "answer":
         return ValidationResult(status="fail_final", failure_reason="not_an_answer")
     hits = {h.chunk_id: h for h in supplied}
@@ -65,6 +72,8 @@ def validate_evidence(
                 reasons.append("quote_too_long")
         if re.search(r"\[[^\]]*(?:§|\bv\d+\b|\bpp?\.\s*\d)", claim.text):
             reasons.append("model_authored_citation")
+        numeric = numeric_errors(claim, hits, config) if not reasons else []
+        reasons.extend(numeric)
         outcomes.append(
             ClaimCheck(
                 i=i,
@@ -85,6 +94,7 @@ def validate_evidence(
                         r in reasons for r in ("quote_not_substring", "quote_too_long")
                     ),
                     "model_citations_absent": "model_authored_citation" not in reasons,
+                    "numeric": not numeric,
                 },
                 reasons=list(dict.fromkeys(reasons)),
             )
