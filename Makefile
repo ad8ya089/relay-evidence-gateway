@@ -7,9 +7,9 @@ STANDIN_ARGS ?=
 CALIBRATE_ARGS ?=
 QUESTION ?= Explain encoder-decoder attention
 PIPELINE_ARGS ?= --setting A
-RELAY_ARGS ?= --no-cache
+RELAY_ARGS ?=
 
-.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline pipeline-smoke
+.PHONY: ingest retr-eval test check standin relay probe probe-shapes eval-real calibrate capacity scenario scenarios aggregate timeline pipeline-smoke control-smoke
 ingest:
 	$(PYTHON) -m relay.retrieval.ingest $(INGEST_ARGS)
 retr-eval:
@@ -26,6 +26,8 @@ pipeline-smoke:
 	$(PYTHON) -m relay.app.smoke --question "$(QUESTION)" $(PIPELINE_ARGS)
 relay:
 	$(PYTHON) -m relay.app.api $(RELAY_ARGS)
+control-smoke:
+	$(PYTHON) -m pytest -q -s tests/test_control_api.py::test_native_http_p3_and_relay_sse_with_real_corpus tests/test_control_scenarios.py::test_native_http_cache_exhaustion_breaker_pressure_and_burst
 test:
 	$(PYTHON) -m pytest
 check:

@@ -31,8 +31,9 @@ from relay.control.retry import RetryBudget
 from relay.control.scheduler import ProviderScheduler
 from relay.control.settings import load_policy
 from relay.obs.clock import SystemClock
-from relay.obs.events import EventContext, EventWriter
+from relay.obs.events import EventContext, EventWriteError, EventWriter
 from relay.providers.groq import GroqCompatibleProvider, is_loopback_url
+from relay.providers.settings import provider_settings
 from relay.retrieval.models import CorpusManifest
 from relay.retrieval.search import RetrievalEngine
 from relay.settings import PaperId
@@ -139,15 +140,32 @@ def create_app(
             while not await request.is_disconnected():
                 await asyncio.sleep(plane.policy.server.disconnect_poll_ms / 1000)
 
-        work = asyncio.create_task(plane.ask(question, cache_enabled=payload.cache))
+        arrival = plane.clock.monotonic_ns()
+
+        def client_gone() -> None:
+            plane.events.write(
+                EventContext(rid=rid, run="p5-local", arrival_ns=arrival),
+                "client_disconnected",
+                phase="preparing",
+            )
+
+        work = asyncio.create_task(
+            plane.ask(question, cache_enabled=payload.cache, arrival_ns=arrival)
+        )
         monitor = asyncio.create_task(disconnect())
         try:
             done, _ = await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
             if monitor in done and work not in done:
+                client_gone()
                 work.cancel()
                 await asyncio.gather(work, return_exceptions=True)
                 return Response(status_code=499)
             result = await work
+        except asyncio.CancelledError:
+            client_gone()
+            raise
+        except Exception:
+            return rejection_response(Reject(reason="provider_unavailable", status_code=503), rid)
         finally:
             monitor.cancel()
             if not work.done():
@@ -173,9 +191,13 @@ def create_app(
                 }
                 else "provider_unavailable",
             )
+            quota_view = await plane.limiter.remaining(plane.model)
             return rejection_response(
                 Reject(
                     reason=reason,
+                    retry_after_s=quota_view.retry_after_s
+                    if quota_view.blocked == reason
+                    else None,
                     status_code=429
                     if reason.startswith("provider_429")
                     or reason in {"daily_budget_exhausted", "projected_wait"}
@@ -205,7 +227,7 @@ def create_app(
                         "first_token_ms": result.first_token_ms,
                     },
                 )
-            except DeliveryError:
+            except (DeliveryError, EventWriteError):
                 yield sse("error", {"request_id": rid, "message": message("deadline_infeasible")})
             except asyncio.CancelledError:
                 plane.events.write(
@@ -258,7 +280,15 @@ def create_local_app(
         flight = SingleFlight(policy.cache, clock)
         with Ledger(ledger_path, clock=clock) as ledger:
             async with GroqCompatibleProvider(
-                url, None, model, ledger=ledger, events=events, clock=clock
+                url,
+                None,
+                model,
+                ledger=ledger,
+                events=events,
+                clock=clock,
+                settings=provider_settings().model_copy(
+                    update={"error_rules": policy.standin_error_rules}
+                ),
             ) as provider:
                 limiter = Limiter(policy, ledger, clock)
                 breaker = CircuitBreaker(policy.breaker, clock)

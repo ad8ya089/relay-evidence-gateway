@@ -67,6 +67,12 @@ class ControlPlane:
             admission,
         )
         self.scheduler, self.retry_budget, self.breaker = scheduler, retry_budget, breaker
+        self.scheduler.maximum = min(
+            scheduler.maximum,
+            policy.max_inflight_real
+            if getattr(provider, "is_real", False)
+            else policy.max_inflight_provider,
+        )
         self.rng, self.sleep = rng or random.Random(policy.retry.seed), sleep
         self.factory = orchestrator_factory or self._orchestrator
         self.allow_unsafe_naive = allow_unsafe_naive
@@ -126,16 +132,16 @@ class ControlPlane:
         if isinstance(admitted, Reject):
             raise AdmissionRejected(admitted)
         try:
-            wait = await self.admission.enter(admitted)
             self._emit(
                 question.request_id,
                 arrival,
                 "admitted",
                 mode=admitted.mode,
                 wait_est_ms=admitted.projected_wait_ms,
-                queue_wait_ms=wait,
                 **await self.admission.snapshot(),
             )
+            wait = await self.admission.enter(admitted)
+            self._emit(question.request_id, arrival, "execution_start", queue_wait_ms=wait)
             execution = RetryController(
                 self.policy.retry,
                 self.clock,
@@ -177,9 +183,13 @@ class ControlPlane:
                 raise
 
     async def ask(
-        self, question: Question, *, cache_enabled: bool | None = None
+        self,
+        question: Question,
+        *,
+        cache_enabled: bool | None = None,
+        arrival_ns: int | None = None,
     ) -> Outcome | Reject:
-        arrival = self.clock.monotonic_ns()
+        arrival = self.clock.monotonic_ns() if arrival_ns is None else arrival_ns
         budget = min(question.deadline_ms or self.policy.deadline_ms, self.policy.deadline_ms)
         deadline = arrival + budget * 1_000_000
         setting = question.setting or pipeline_settings().default_setting

@@ -245,6 +245,31 @@ class Ledger:
         except sqlite3.Error as exc:
             raise LedgerError(f"Cannot read attempt ({type(exc).__name__})") from None
 
+    def has_calls(self, model: str, *, real: bool) -> bool:
+        """Read-only restart guard; UTC rows cannot reconstruct monotonic windows."""
+        try:
+            with self._lock:
+                return (
+                    self._db.execute(
+                        "SELECT 1 FROM calls WHERE model=? AND real=? LIMIT 1", (model, int(real))
+                    ).fetchone()
+                    is not None
+                )
+        except sqlite3.Error as exc:
+            raise LedgerError(f"Cannot read prior activity ({type(exc).__name__})") from None
+
+    def pending_calls(self, model: str, *, real: bool) -> list[CallRecord]:
+        """Retain durable in-flight bounds across process and UTC-date boundaries."""
+        try:
+            with self._lock:
+                rows = self._db.execute(
+                    "SELECT * FROM calls WHERE model=? AND real=? AND status='pending'",
+                    (model, int(real)),
+                ).fetchall()
+                return [CallRecord.model_validate(dict(row)) for row in rows]
+        except sqlite3.Error as exc:
+            raise LedgerError(f"Cannot read pending activity ({type(exc).__name__})") from None
+
     def finish_call(
         self,
         call_id: str,

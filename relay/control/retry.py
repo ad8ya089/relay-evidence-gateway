@@ -204,6 +204,24 @@ class RetryController:
                         await self.limiter.on_quota_error(
                             runner.model, invocation.failure.kind, invocation.failure.retry_after_ms
                         )
+                    if self.events and snapshot and snapshot.headers:
+                        view = await self.limiter.remaining(runner.model)
+                        self.events.write(
+                            EventContext(
+                                rid=book.request_id, run=book.run_id, arrival_ns=book.arrival_ns
+                            ),
+                            "limiter_update",
+                            source="429"
+                            if invocation
+                            and invocation.failure
+                            and invocation.failure.kind.startswith("rate_limit_")
+                            else "header",
+                            model=runner.model,
+                            observed_ns=snapshot.observed_ns,
+                            limit_tokens=view.limits.tpm,
+                            remaining=view.tpm,
+                            uncertain=view.uncertain,
+                        )
                     if self.on_capacity_change:
                         await self.on_capacity_change()
                 if self.breaker:
@@ -243,11 +261,18 @@ class RetryController:
                     book.retries += 1
                 return await self._once(runner, book, kind, messages, schema, attempt)
 
-            return await NaiveRetryPolicy(self.config).run(operation)
-        await self.budget.original()
+            naive = self.config.model_copy(
+                update={"naive_retries": max(0, self.config.naive_retries - book.retries)}
+            )
+            return await NaiveRetryPolicy(naive).run(operation)
         attempt = 1
         while True:
+            before_attempts = len(book.attempts)
             invocation = await self._once(runner, book, kind, messages, schema, attempt)
+            if attempt == 1 and any(
+                a.dispatched and not a.is_retry for a in book.attempts[before_attempts:]
+            ):
+                await self.budget.original()
             failure = invocation.failure
             if (
                 failure is None
@@ -315,9 +340,17 @@ class NaiveRetryPolicy:
                 task = asyncio.create_task(operation(attempt))
                 tasks.append(task)
                 try:
-                    return await asyncio.wait_for(
+                    result = await asyncio.wait_for(
                         asyncio.shield(task), self.config.naive_timeout_ms / 1000
                     )
+                    if (
+                        isinstance(result, Invocation)
+                        and result.failure is not None
+                        and result.failure.kind
+                        in {"server", "timeout", "disconnect", "rate_limit_minute"}
+                    ):
+                        continue
+                    return result
                 except TimeoutError:
                     continue
             return await tasks[-1]

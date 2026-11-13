@@ -90,7 +90,7 @@ class Admission:
             if view.tpd < need.tokens or view.rpd < need.requests:
                 return Reject(
                     reason="daily_budget_exhausted",
-                    retry_after_s=self.limiter.local_daily_reset_s(),
+                    retry_after_s=self.limiter.local_daily_reset_s() if view.limits.rpd else None,
                 )
             breaker = await self.breaker.snapshot(model)
             if breaker.state == "open" or breaker.probe_inflight:
@@ -101,6 +101,7 @@ class Admission:
             if not available and len(self.queue) >= self.policy.queue_capacity:
                 return Reject(reason="queue_full")
             wait = await self.limiter.projected_wait(need)
+            minute_wait = wait
             expected = self.policy.estimates[setting].expected_service_ms
             slot_wait = (
                 0
@@ -111,7 +112,12 @@ class Admission:
                 return Reject(reason="projected_wait")
             wait = max(wait, slot_wait)
             if wait > self.policy.max_queue_wait_ms:
-                return Reject(reason="projected_wait", retry_after_s=wait / 1000)
+                return Reject(
+                    reason="projected_wait",
+                    retry_after_s=minute_wait / 1000
+                    if minute_wait is not None and minute_wait > self.policy.max_queue_wait_ms
+                    else None,
+                )
             if wait + expected > (deadline_ns - self.clock.monotonic_ns()) / 1e6:
                 return Reject(reason="deadline_infeasible")
             if request_id in self.leases:
@@ -143,6 +149,8 @@ class Admission:
         async with self.condition:
             while admitted.request_id not in self.active:
                 now = self.clock.monotonic_ns()
+                if (admitted.deadline_ns - now) / 1e6 < admitted.expected_service_ms:
+                    raise AdmissionRejected(Reject(reason="deadline_infeasible"))
                 patience = min(
                     admitted.deadline_ns,
                     admitted.arrival_ns + self.policy.max_queue_wait_ms * 1_000_000,
@@ -174,6 +182,10 @@ class Admission:
                     )
                 except TimeoutError:
                     pass
+            if (
+                admitted.deadline_ns - self.clock.monotonic_ns()
+            ) / 1e6 < admitted.expected_service_ms:
+                raise AdmissionRejected(Reject(reason="deadline_infeasible"))
             return (self.clock.monotonic_ns() - admitted.arrival_ns) / 1e6
 
     async def release(self, request_id: str) -> None:

@@ -8,9 +8,18 @@ from datetime import UTC, timedelta
 from pydantic import BaseModel, Field
 
 from relay.control.ledger import Ledger, LedgerError
-from relay.control.settings import Limits, Policy
+from relay.control.settings import Policy
 from relay.obs.clock import Clock
 from relay.providers.base import HeaderSnapshot, Usage
+
+
+class EffectiveLimits(BaseModel):
+    """Provider observations may disable capacity; configured limits stay positive."""
+
+    rpm: int = Field(ge=0)
+    tpm: int = Field(ge=0)
+    rpd: int = Field(ge=0)
+    tpd: int = Field(ge=0)
 
 
 class Need(BaseModel):
@@ -35,12 +44,13 @@ class Charge(BaseModel):
 
 class Capacity(BaseModel):
     model: str
-    limits: Limits
+    limits: EffectiveLimits
     rpm: int
     tpm: int
     rpd: int
     tpd: int
     uncertain: bool
+    diagnostics: list[str] = Field(default_factory=list)
     outstanding_tokens: int
     outstanding_requests: int
     daily_used_tokens: int
@@ -81,12 +91,22 @@ class Limiter:
         self.lock = asyncio.Lock()
         self.reservations: dict[str, Reservation] = {}
         self.charges: dict[str, Charge] = {}
-        self._limits = dict(policy.limits)
+        self._limits = {
+            model: EffectiveLimits.model_validate(limits.model_dump())
+            for model, limits in policy.limits.items()
+        }
         self.observations: dict[str, dict[str, Observation]] = {}
         self.cooling: dict[str, int] = {}
         self.blocked: dict[str, tuple[str, int | None]] = {}
         self.total_tokens: dict[str, int] = {}
         self.total_requests: dict[str, int] = {}
+        # Historical monotonic window state cannot be inferred from UTC ledger rows.
+        # A full local window safely ages out any attempts from a previous process.
+        self.startup_until = {
+            model: clock.monotonic_ns() + policy.window_s * 1_000_000_000
+            for model in policy.limits
+            if ledger.has_calls(model, real=real)
+        }
 
     def _view(self, model: str, now: int, exclude: str | None = None) -> Capacity:
         cutoff = self.clock.monotonic_ns() - self.policy.window_s * 1_000_000_000
@@ -104,7 +124,17 @@ class Limiter:
         pending = [
             (cid, c) for cid, c in self.charges.items() if c.model == model and c.settled_ns is None
         ]
+        ledger_pending = self.ledger.pending_calls(model, real=self.real)
+        owned = {cid for cid, _ in pending}
+        orphaned = [record for record in ledger_pending if record.id not in owned]
+        today = self.clock.utc_now().astimezone(UTC).date()
+        prior = [
+            record
+            for record in ledger_pending
+            if record.ts_utc is not None and record.ts_utc.date() != today
+        ]
         outstanding_tokens = sum(r.tokens for r in reservations) + sum(c.tokens for _, c in pending)
+        outstanding_tokens += sum(record.reserved_tokens for record in orphaned)
         outstanding_requests = sum(r.requests for r in reservations)
         window_ns = self.policy.window_s * 1_000_000_000
         actual = [
@@ -115,28 +145,45 @@ class Limiter:
         requests = sum(
             c.model == model and c.started_ns + window_ns > now for c in self.charges.values()
         )
+        requests += len(orphaned)
         usage = self.ledger.daily_usage(model, real=self.real)
         missing_tokens, missing_requests = 0, 0
         for cid, charge in pending:
             try:
-                self.ledger.get_call(cid)
+                record = self.ledger.get_call(cid)
+                if record.counted_tokens is not None:
+                    outstanding_tokens += max(0, record.counted_tokens - charge.tokens)
             except LedgerError:
                 missing_tokens += charge.tokens
                 missing_requests += 1
-        day_tokens = usage.guard_charged_tokens + missing_tokens
-        day_requests = usage.attempts + missing_requests
+        day_tokens = (
+            usage.guard_charged_tokens
+            + missing_tokens
+            + sum(record.reserved_tokens for record in prior)
+        )
+        day_requests = usage.attempts + missing_requests + len(prior)
         unstarted_tokens = sum(r.tokens for r in reservations)
-        uncertain = bool(usage.unknown_usage_count or any(c.uncertain for c in actual))
+        uncertain = bool(
+            usage.unknown_usage_count or ledger_pending or any(c.uncertain for c in actual)
+        )
+        unbounded = (
+            usage.unreserved_unknown_count
+            or usage.inconsistent_usage_count
+            or any(record.reserved_tokens <= 0 for record in ledger_pending)
+        )
         view = Capacity(
             model=model,
             limits=limits,
             rpm=max(0, limits.rpm - requests - outstanding_requests),
-            tpm=max(0, limits.tpm - sum(c.tokens for c in actual) - outstanding_tokens),
+            tpm=0
+            if unbounded
+            else max(0, limits.tpm - sum(c.tokens for c in actual) - outstanding_tokens),
             rpd=max(0, limits.rpd - day_requests - outstanding_requests),
-            tpd=0
-            if usage.unreserved_unknown_count
-            else max(0, limits.tpd - day_tokens - unstarted_tokens),
+            tpd=0 if unbounded else max(0, limits.tpd - day_tokens - unstarted_tokens),
             uncertain=uncertain,
+            diagnostics=(["unknown_or_inflight_usage"] if uncertain else [])
+            + (["unbounded_or_inconsistent_usage"] if unbounded else [])
+            + (["prior_process_pending_reservations"] if orphaned else []),
             outstanding_tokens=outstanding_tokens,
             outstanding_requests=outstanding_requests,
             daily_used_tokens=day_tokens,
@@ -158,13 +205,20 @@ class Limiter:
                 if scope == "tpm"
                 else self.total_requests.get(model, 0) - observation.local_requests
             )
-            reserved = outstanding_tokens if scope == "tpm" else outstanding_requests + len(pending)
+            reserved = (
+                outstanding_tokens
+                if scope == "tpm"
+                else outstanding_requests + len(pending) + len(orphaned)
+            )
             setattr(
                 view,
                 scope,
                 min(getattr(view, scope), max(0, observation.remaining - spent - reserved)),
             )
         until = self.cooling.get(model, 0)
+        startup = self.startup_until.get(model, 0)
+        if startup > now:
+            view.blocked, view.retry_after_s = "projected_wait", (startup - now) / 1e9
         if until > now:
             view.blocked, view.retry_after_s = "provider_429_minute", (until - now) / 1e9
         if model in self.blocked:
@@ -185,6 +239,7 @@ class Limiter:
             return None
         candidates = {now}
         candidates.add(self.cooling.get(need.model, now))
+        candidates.add(self.startup_until.get(need.model, now))
         for observation in self.observations.get(need.model, {}).values():
             if observation.reset_ns is not None:
                 candidates.add(observation.reset_ns)
@@ -340,7 +395,7 @@ class Limiter:
                         if previous_remaining is not None
                         else remaining
                     )
-                if limit is not None and limit > 0:
+                if limit is not None and limit >= 0:
                     limit = min(limit, getattr(self.policy.limits[model], scope))
                     if previous and snapshot.observed_ns == previous.observed_ns:
                         limit = min(limit, getattr(self._limits[model], scope))
@@ -372,7 +427,13 @@ class Limiter:
                 )
             elif kind in {"rate_limit_day", "rate_limit_unknown"}:
                 observation = self.observations.get(model, {}).get("rpd")
-                expiry = observation.reset_ns if observation else None
+                expiry = (
+                    observation.reset_ns
+                    if kind == "rate_limit_day"
+                    and observation
+                    and (self.policy.daily_reset_known or observation.remaining == 0)
+                    else None
+                )
                 # Retry-After alone cannot establish daily/unknown quota recovery.
                 self.blocked[model] = (
                     "provider_429_day" if kind == "rate_limit_day" else "provider_429_unknown",
@@ -381,7 +442,10 @@ class Limiter:
 
     async def utilisation(self, model: str) -> dict[str, float]:
         view = await self.remaining(model)
-        return {"minute": 1 - view.tpm / view.limits.tpm, "day": 1 - view.tpd / view.limits.tpd}
+        return {
+            "minute": 1 - view.tpm / view.limits.tpm if view.limits.tpm else 1.0,
+            "day": 1 - view.tpd / view.limits.tpd if view.limits.tpd else 1.0,
+        }
 
     def local_daily_reset_s(self) -> float | None:
         if not self.policy.daily_reset_known:

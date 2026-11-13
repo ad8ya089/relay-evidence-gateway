@@ -9,6 +9,10 @@ max_inflight_provider: 4
 max_inflight_real: 2
 window_s: 60
 daily_reset_known: true  # Local UTC budget/P3 reset only.
+# Known P3-only wire codes; never applied to a real-provider factory.
+standin_error_rules:
+  - {field_path: error.code, pattern: '^simulated_(rpm|tpm)_exhausted$', kind: rate_limit_minute, source: fixture}
+  - {field_path: error.code, pattern: '^simulated_(rpd|tpd)_exhausted$', kind: rate_limit_day, source: fixture}
 limits:
   openai/gpt-oss-20b: {rpm: 120, tpm: 100000, rpd: 20000, tpd: 2000000}
 estimates:

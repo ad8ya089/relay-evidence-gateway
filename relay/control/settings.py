@@ -6,6 +6,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from relay.providers.settings import ErrorRule
+
 
 class PolicyModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -95,6 +97,7 @@ class Policy(PolicyModel):
     max_inflight_real: int = Field(gt=0)
     window_s: Literal[60]
     daily_reset_known: bool
+    standin_error_rules: list[ErrorRule]
     limits: dict[str, Limits] = Field(min_length=1)
     estimates: dict[Literal["A", "B", "C"], Estimate]
     normal: ModePolicy

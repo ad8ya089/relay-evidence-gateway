@@ -1,0 +1,37 @@
+P5 files relative to C:\dev\relay-evidence-gateway
+Baseline: 34376c725abaef97fe139abd2f4c7df05caca887
+A = created; M = changed
+
+M	Makefile
+M	NOTES.md
+A	P5_FILES.txt
+M	config/policy.yaml
+M	relay/app/api.py
+M	relay/app/cache.py
+M	relay/app/calls.py
+M	relay/app/delivery.py
+A	relay/app/messages.py
+M	relay/app/models.py
+M	relay/app/orchestrator.py
+M	relay/app/settings.py
+A	relay/app/singleflight.py
+M	relay/control/admission.py
+M	relay/control/breaker.py
+M	relay/control/ledger.py
+M	relay/control/limiter.py
+A	relay/control/plane.py
+M	relay/control/retry.py
+A	relay/control/scheduler.py
+A	relay/control/settings.py
+A	tests/fixtures/control.py
+A	tests/test_control_admission.py
+A	tests/test_control_api.py
+A	tests/test_control_breaker.py
+A	tests/test_control_cache.py
+A	tests/test_control_hardening.py
+A	tests/test_control_limiter.py
+A	tests/test_control_plane.py
+A	tests/test_control_retry.py
+A	tests/test_control_scenarios.py
+A	tests/test_control_scheduler.py
+A	tests/test_control_singleflight.py

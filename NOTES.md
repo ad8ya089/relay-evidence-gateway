@@ -691,3 +691,204 @@ will bound the final supplied evidence after merges/adjacency as well as top_k.
 P4 prefixes/markers, quote/number checks and metadata rendering remain unchanged.
 Cache persistence needs a separately owned SQLite table; loading a serialized
 Outcome cannot by itself restore P4's private validation approval.
+
+## P5 final architecture and quota policy
+
+ControlPlane composes the P4 orchestrator with a Limiter, Admission,
+ProviderScheduler, RetryController/RetryBudget, CircuitBreaker, AnswerCache and
+SingleFlight. All are explicit dependencies of create_app through ControlPlane;
+create_local_app constructs owned dependencies in its lifespan. There are no
+P5 module-global service instances. P2's provider adapter, guard and actual-usage
+writes are unchanged. P4's deterministic/numeric validation, prompts, verifier
+and citation renderer remain responsible for correctness. The P4 integration
+adds a CallExecution injection around the existing one-attempt implementation,
+an additional-resource repair hook, request-origin propagation and pressure caps.
+The existing bounded tool retry is unchanged and distinct from provider retries.
+
+Normal request path: cache -> existing single-flight -> daily budget -> breaker
+-> queue capacity -> projected minute/slot wait -> deadline feasibility -> atomic
+reservation -> bounded logical execution -> P4 -> sealed delivery. Cache is off
+by default and --no-cache disables both caching and coalescing. Validated cache
+hits remain available when quotas or the breaker block new work. Queue admission
+and model concurrency are separate: default four active logical requests, twenty
+queue places and four provider slots. These are assumed local development choices.
+
+For each model, the effective TPM/RPD caps are the smaller of the configured
+local ceiling and the latest valid provider limit. RPM and TPD have no inferred
+provider headers. A provider reduction takes effect immediately, including zero;
+a larger header cannot erase a stricter local ceiling. Raw request headers mean
+RPD and raw token headers mean TPM. Observations carry monotonic timestamps and
+reset information. Older responses cannot replace newer observations. Equal-tick
+observations take the conservative minimum, since ordering cannot be proved.
+Within an unexpired observation, larger remaining values cannot manufacture
+recovery; previous local consumption is carried forward into the new bound.
+
+Let U be unused logical reservations, P in-flight estimated charges, and W actual
+counted tokens in the rolling window. Local TPM remaining is max(0, L-W-P-U).
+The header bound subtracts local consumption since its accepted observation and
+all outstanding work from the provider remaining value. Available TPM is the
+minimum of local remaining and that valid header bound. Local RPM subtracts
+rolling request-attempt starts and unused reserved attempts. RPD applies the
+same conservative minimum using ledger attempts and the daily request header.
+TPD uses P2's UTC-day guard_charged_tokens plus unused reservations and pending
+bounds not already represented in that day's ledger. Actual counted tokens are
+input - cached + output; reasoning is already in output. P5 never inserts or
+double-adds actual call usage. Unknown usage keeps its conservative bound;
+unbounded/inconsistent usage closes capacity and exposes explicit diagnostics.
+
+Each provider dispatch transfers an estimate out of its logical reservation into
+a uniquely identified in-flight charge. Reconciliation is idempotent and never
+clips excess usage. A known excess already persisted by P2 is respected even
+before the asynchronous reconciliation callback resumes. Unused resources are
+released in cancellation-safe cleanup; pending/unknown charges survive. Two
+additive read-only Ledger helpers, has_calls and pending_calls, support restart
+guards and pending reservations across UTC dates. They do not change P2 writes,
+schema or accounting. After prior ledger activity, a full configured minute is
+guarded at startup because wall-clock rows cannot reconstruct a monotonic window.
+Orphaned pending bounds remain conservative until their durable status is resolved.
+
+The logical queue contains only requests predicted to fit patience and deadline.
+Its service estimate is checked again before execution. Capacity changes wake
+queued requests for re-evaluation. The provider scheduler prioritizes verify,
+repair, then draft. Aging (2 seconds) or eight consecutive priority grants protects
+old drafts. All values are policy settings. /state reports current and peak logical
+queue lengths separately from provider in-flight/waiter counts and peak waiters.
+
+## P5 retry, breaker, modes and cache
+
+control/retry.py is the sole provider retry policy owner. Default: at most one
+additional attempt across the entire logical request, full jitter from 200 ms
+up to 1,000 ms, Retry-After as a lower bound, and a 1,500 ms deadline safety margin.
+The Decimal retry bucket starts empty, earns 0.1 credit per dispatched original
+attempt and caps at ten credits. Locally blocked operations do not earn credit.
+Issued credits can be consumed by a subsequently cancelled/unaffordable retry,
+conservatively reducing retries; dispatched provider calls remain separately counted.
+Day/unknown quota, auth, invalid requests and validation failures are not retried.
+An active slow call is never duplicated by the bounded policy. P2 closes cancelled
+streams before it returns control; known partial usage/status/timing is retained.
+Retries have unique P2 call IDs and all attempts remain in the logical call book.
+
+NaiveRetryPolicy is an explicitly unsafe S7a comparison only: 1,500 ms timeout,
+up to three additional attempts per logical request, no jitter or global budget.
+It shields slow operations and can overlap duplicates. Every duplicate is still
+owned, awaited/cancelled and accounted for. Selecting naive_s7a also requires
+--allow-unsafe-naive. It is never a default. Tests demonstrate overlap for slow
+successful work, unlike bounded execution, and completed server-failure retries.
+
+Breakers are per model: five consecutive server errors/timeouts in twenty seconds
+open for five seconds; expiry permits one half-open probe; success closes and
+failure reopens. Validation/refusal/queue/day-quota failures do not count.
+Minute 429 counting is an explicit policy switch, false by default. Breaker and
+provider observations remain process-local, consistent with one-worker operation.
+
+Normal mode preserves the selected retrieval setting and permits one repair only
+after reserving its additional draft-plus-verifier resources. Pressure starts at
+70% minute or 80% day utilisation, caps supplied evidence at three passages and
+draft output at 280, keeps verifier output at 120, and disables repair. Numeric
+neighbours are preferred within the evidence cap. Normal draft cap is 450.
+Daily exhaustion/breaker-open blocks new provider calls; safe cache hits remain
+available. Policy values are engineering assumptions, not measured Groq behavior.
+
+Cache identity hashes framed normalized question, setting, model, prompt version,
+corpus hash and explicit paper scope. The latter prevents different user source
+restrictions sharing a result. Only P4-approved successful answers/local/model
+refusals enter the cache; validation abstention, provider errors and timeouts do
+not. Stored entries retain metadata, approval fingerprint and corruption checksum.
+SQLite is trusted local application storage, not a boundary against someone who
+can rewrite its database. Persistence TTL uses the host monotonic clock; retained
+entries with a future creation tick are invalidated. A different corpus/prompt
+cannot reuse them. /state contains counters, never cached text or question keys.
+
+Single-flight owns computation independently of its original caller. Each waiter
+has its own request ID/deadline and receives a deep copy with a fresh delivery
+seal. Owner cancellation preserves work for surviving waiters; last-waiter
+cancellation waits for provider/ledger/resource cleanup. Completion populates the
+cache once. Only the computation owner is charged provider usage; coalesced/cache
+responses report zero new provider consumption while the original ledger/event
+correlation remains intact. Waiter count is bounded and exposed.
+
+## P5 HTTP service and executed local scenarios
+
+POST /ask accepts question (text is an alias), setting A/B/C, optional deadline_ms,
+paper_scope and cache=false. X-Request-Id is validated or a UUID is generated.
+The policy deadline bounds client-supplied budgets. Admission failures return JSON
+before SSE starts: 429 for quota/queue/capacity, 503 for breaker/unavailability.
+The body contains message/reason and retry_after_s only with a reliable hint.
+Assumed slot completion and unknown quota scope cannot create a reset promise.
+Known hints also produce integer Retry-After headers. No reset time is invented.
+
+After P4 approves the result, SSE answer events contain request_id/text fragments
+and complete carries status, citations and safe usage/control metrics. Canonical
+abstention is safe to deliver but remains status error and is not cached. Backend
+exceptions are safe 503s; invalid payloads are safe 422s. Disconnection during
+preparation cancels the appropriate waiter/execution; delivery cancellation never
+exposes draft/verifier content. P4 first_user_token remains actual validated yield,
+and done follows delivered pieces. Admission records post-admission queue depth;
+execution_start records actual queue wait. Limiter/retry/disconnect events extend
+the existing EventWriter envelope without prompt content.
+
+GET /healthz is minimal liveness. GET /state is loopback-only and reports modes,
+queues, per-model quota/unknown diagnostics, usage, retry/breaker/cache/single-flight
+state. Forwarded headers are not trusted; there is no wildcard CORS. CLI binds
+127.0.0.1 and forces one Uvicorn worker. P5's factory refuses external origins
+before creating accounting files and never looks up an API key. Known P3 simulated
+quota-code classifiers live in policy.yaml and are applied only by this loopback
+factory. Existing real-provider classification/guard configuration stays unchanged.
+
+Executed native localhost integration uses ephemeral P3 and Relay Uvicorn ports,
+the actual P2 adapter, actual P4, pinned corpus and no credentials. It verifies
+draft + verifier + sealed citation delivery and exact ledger equality. The local
+operations scenario starts cache-disabled (two calls), warms the cache (two more),
+then demonstrates: daily rejection HTTP 429; zero-call cache hit after exhaustion;
+breaker rejection HTTP 503; verified pressure response; and eight concurrent
+uncached arrivals with one success and seven early 429s. Final provider-call count
+is eight. Native disconnect tests confirm P3 becomes idle, ledger has no pending
+attempt and scheduler/reservations are cleaned. Native P3 RPM/TPD exhaustion tests
+verify explicit minute/day classification and known Retry-After without guessing
+real provider shapes. These are synthetic protocol/control observations, not
+real-account measurements, throughput claims or research-answer quality grades.
+
+Local commands: make standin PROFILE=development, then make relay (policy cache
+off by default). Explicit isolation: make relay RELAY_ARGS="--no-cache". Use
+RELAY_ARGS="--base-url http://127.0.0.1:PORT/openai/v1 --port PORT --no-cache"
+when choosing ports. make control-smoke launches/cleans up ephemeral test servers
+and consumes actual HTTP SSE; it does not require an existing :8081 listener.
+Request example: POST /ask with {"question":"Explain encoder-decoder attention",
+"setting":"A","cache":false}. No P6 load generator or P7 packaging was added.
+
+## P5 verification record
+
+The unchanged P1-P4 baseline passed 322 tests before implementation. P5 acceptance
+coverage is in tests/test_control_*.py and the deterministic control fixture.
+It includes atomic reservations, independent windows/header scopes, concurrent
+out-of-order observations, changed/zero limits, cache-before-exhaustion, bounded
+queue/priority/starvation, global/per-request retries, half-open probes, twenty-way
+coalescing, owner/last-waiter cancellation, pressure caps reaching the provider,
+conditional repair budget, corrupt cache rejection, UTC/restart/pending accounting,
+native HTTP/SSE, provider-side quota rejection and small burst shedding.
+
+Confirmed integration defects were reproduced with failing tests before fixes:
+larger headers erasing local ceilings; blocked attempts earning retry credit;
+naive completed server errors not retrying; lost restart window and prior-day
+pending bounds; and durable token excess racing async reconciliation. Original
+P1-P4 tests were not weakened. Final full pytest and make test each passed 410
+tests: the unchanged 322-test baseline plus 88 P5 acceptance/integration tests.
+Full pytest took 86.55 seconds and make test 87.97 seconds on this machine.
+Ruff check passed; format check reported 144 files formatted. Mypy is not
+configured. Startup --check --no-cache passed. Protected SHA-256 mismatches:
+zero of 13 (the original 11 documents plus questions/gold). No baseline test or
+provider module changed. Source/artifact scan: 33 files, zero problems; 18 created
+and 15 modified. Complete file inventory: P5_FILES.txt.
+make control-smoke also passed both native HTTP/SSE tests in 15.12 seconds,
+including the printed eight-provider-call operational scenario above. No real
+Groq requests, real quota probes or API-key lookups were performed in P5.
+
+Remaining limits: assumed service/token estimates and local ceilings require real
+measurements later; no real quota/model capability was probed. Conservative header
+bounds and restart/pending guards can shed more than necessary. SQLite cache is
+local trusted state and monotonic TTL continuity assumes the same host clock.
+Process-local breaker/provider observations are not distributed state. Unknown
+or orphaned usage may require operator review. Proposed original-document edits
+remain unapplied: replace overwrite-only quota instructions with the conservative
+minimum rule, name the injected central retry owner, and distinguish queue wait,
+handle completion, validated delivery and restart accounting explicitly.
