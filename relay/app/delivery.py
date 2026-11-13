@@ -73,3 +73,14 @@ async def iter_validated_answer(
                     state=outcome.state.value,
                 )
         yield outcome.text[start : start + size]
+    if events is not None:
+        events.write(
+            EventContext(rid=outcome.request_id, run=outcome.run_id, arrival_ns=outcome.arrival_ns),
+            "done",
+            state=outcome.state.value,
+            status=outcome.status,
+            failure_reason=outcome.failure_reason,
+            total_ms=(clock.monotonic_ns() - outcome.arrival_ns) / 1e6,
+            provider_calls=outcome.provider_calls,
+            usage_complete=outcome.usage.complete,
+        )

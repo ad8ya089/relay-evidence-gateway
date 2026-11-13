@@ -53,6 +53,25 @@ def call_kind(messages: list[Message]) -> Literal["draft", "verify", "generic"]:
     return "draft" if draft else "verify" if verify else "generic"
 
 
+def _bounded_quote(content: str) -> str:
+    """Prefer an intact passage over PDF headings or a clipped list preamble."""
+    for paragraph in re.split(r"\n\s*\n", content):
+        paragraph = paragraph.strip()
+        if not paragraph or paragraph.endswith(":"):
+            continue
+        if re.match(r"^\d+(?:\.\d+)*\s+", paragraph) and not paragraph.endswith((".", "!", "?")):
+            continue
+        for sentence in re.finditer(r".+?(?:[.!?](?=\s|$)|$)", paragraph, re.S):
+            quote = sentence[0].strip()
+            if quote and len(quote.split()) <= 40:
+                return quote
+    sentence = re.match(r".+?(?:[.!?](?=\s|$)|$)", content, re.S)
+    if sentence is None:
+        return ""
+    words = list(re.finditer(r"\S+", sentence[0]))
+    return sentence[0][: words[min(40, len(words)) - 1].end()]
+
+
 def draft_response(text: str) -> Draft:
     chunks = list(re.finditer(r"<<chunk:([^<>\s]+)>>([\s\S]*?)<<end>>", text))
     if text.count("<<chunk:") != len(chunks) or text.count("<<end>>") != len(chunks):
@@ -64,11 +83,9 @@ def draft_response(text: str) -> Draft:
         content = chunk[2].strip()
         if not content:
             continue
-        sentence = re.match(r".+?(?:[.!?](?=\s|$)|$)", content, re.S)
-        if sentence is None:
+        quote = _bounded_quote(content)
+        if not quote:
             continue
-        words = list(re.finditer(r"\S+", sentence[0]))
-        quote = sentence[0][: words[min(40, len(words)) - 1].end()]
         return Draft(
             status="answer",
             claims=[Claim(text=quote, evidence=[Evidence(chunk_id=chunk[1], quote=quote)])],

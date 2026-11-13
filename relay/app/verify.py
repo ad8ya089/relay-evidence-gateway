@@ -34,7 +34,10 @@ async def verify(
         return deterministic
     invocation = await runner.invoke(book, "verify", prompts.verify(draft.claims), Verification)
     if invocation.failure is not None:
-        if invocation.failure.kind == "invalid_response":
+        if (
+            invocation.failure.kind == "invalid_response"
+            and invocation.failure.safe_context.get("origin") != "provider_boundary"
+        ):
             return invalid_verifier("verifier_schema_invalid", deterministic)
         raise VerificationCallError(invocation)
     assert invocation.result is not None

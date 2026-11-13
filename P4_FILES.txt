@@ -1,0 +1,43 @@
+P4 files relative to C:\dev\relay-evidence-gateway
+Baseline: 0d25179b5e7e48e0a0cdc427050e787fb8f1666b
+A = created; M = changed
+
+M	Makefile
+M	NOTES.md
+A	P4_FILES.txt
+A	config/pipeline.yaml
+A	relay/app/calls.py
+A	relay/app/delivery.py
+M	relay/app/gate.py
+M	relay/app/interpret.py
+A	relay/app/local.py
+M	relay/app/models.py
+A	relay/app/numeric.py
+M	relay/app/orchestrator.py
+A	relay/app/prompts.py
+M	relay/app/render.py
+A	relay/app/settings.py
+A	relay/app/smoke.py
+A	relay/app/state.py
+A	relay/app/text.py
+M	relay/app/validation.py
+A	relay/app/verify.py
+M	relay/tools/executor.py
+M	standin/generation.py
+A	tests/fixtures/app_integration.py
+A	tests/fixtures/app_provider.py
+A	tests/test_app_accounting.py
+A	tests/test_app_calls.py
+A	tests/test_app_deadlines.py
+A	tests/test_app_edges.py
+A	tests/test_app_gate.py
+A	tests/test_app_integration.py
+A	tests/test_app_interpret.py
+A	tests/test_app_models.py
+A	tests/test_app_numeric.py
+A	tests/test_app_orchestrator.py
+A	tests/test_app_prompts.py
+A	tests/test_app_render.py
+A	tests/test_app_smoke.py
+A	tests/test_app_validation.py
+A	tests/test_tool_executor.py

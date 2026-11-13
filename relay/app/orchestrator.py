@@ -3,7 +3,7 @@
 import asyncio
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from relay.app.calls import CallRunner, Invocation, RequestCalls
 from relay.app.delivery import _authorize
@@ -59,6 +59,7 @@ class Run(BaseModel):
     draft: Draft | None = None
     validation: ValidationResult | None = None
     stage_ms: dict[str, float] = Field(default_factory=dict)
+    tool_retries: int = 0
 
 
 class Orchestrator:
@@ -135,6 +136,7 @@ class Orchestrator:
             verifier_calls=sum(a.kind == "verify" and a.dispatched for a in attempts),
             repair_calls=sum(a.kind == "repair" and a.dispatched for a in attempts),
             usage=run.calls.totals(),
+            tool_retries=run.tool_retries,
             calls=attempts,
             stage_ms=run.stage_ms,
             provider_ms=sum(a.total_ms for a in attempts),
@@ -149,7 +151,9 @@ class Orchestrator:
             supplied_chunk_ids=[h.chunk_id for h in supplied],
             retrieval_diagnostics=run.retrieval.diagnostics if run.retrieval else [],
             validation=run.validation,
-            states=run.machine.history + [state],
+            states=run.machine.history
+            if run.machine.state == state
+            else run.machine.history + [state],
         )
 
     def _complete(self, run: Run, state: State, status: str, **fields: object) -> Outcome:
@@ -159,7 +163,7 @@ class Orchestrator:
         try:
             self._emit(
                 run,
-                "done",
+                "release_ready" if outcome.releasable else "done",
                 state=state.value,
                 status=status,
                 failure_reason=outcome.failure_reason,
@@ -187,17 +191,21 @@ class Orchestrator:
     ) -> RetrievalResult:
         self._check(run)
         started = self.clock.monotonic_ns()
-        result = await self.executor.execute(
-            query,
-            setting=run.question.setting or self.config.default_setting,
-            paper_filter=paper_filter,
-            paper_hint=paper_hint,
-            numeric=numeric,
-            deadline_ns=run.calls.deadline_ns,
-            context=run.context,
-        )
-        self._timing(run, "retrieval", started)
+        try:
+            result = await self.executor.execute(
+                query,
+                setting=run.question.setting or self.config.default_setting,
+                paper_filter=paper_filter,
+                paper_hint=paper_hint,
+                numeric=numeric,
+                deadline_ns=run.calls.deadline_ns,
+                context=run.context,
+                allow_retry=run.tool_retries < self.config.tool_retry_max,
+            )
+        finally:
+            self._timing(run, "retrieval", started)
         self._move(run, State.RETRIEVED)
+        run.tool_retries += max(0, result.attempt - 1)
         run.queries.append(query)
         run.retrieval = (
             result
@@ -279,14 +287,19 @@ class Orchestrator:
             rejected=run.draft if repair else None,
         )
         started = self.clock.monotonic_ns()
-        invocation = await self.runner.invoke(run.calls, kind, messages, Draft)
-        self._timing(run, kind, started)
+        try:
+            invocation = await self.runner.invoke(run.calls, kind, messages, Draft)
+        finally:
+            self._timing(run, kind, started)
         self._emit(
             run, kind + "_done", status=invocation.failure.kind if invocation.failure else "ok"
         )
         self._check(run)
         if invocation.failure is not None:
-            if invocation.failure.kind != "invalid_response":
+            if (
+                invocation.failure.kind != "invalid_response"
+                or invocation.failure.safe_context.get("origin") == "provider_boundary"
+            ):
                 raise ProviderStageError(invocation)
             run.draft = None
         else:
@@ -310,10 +323,12 @@ class Orchestrator:
             self._check(run)
             assert run.draft is not None
             started = self.clock.monotonic_ns()
-            run.validation = await verify(
-                run.draft, run.validation, self.runner, run.calls, self.prompts
-            )
-            self._timing(run, "verification", started)
+            try:
+                run.validation = await verify(
+                    run.draft, run.validation, self.runner, run.calls, self.prompts
+                )
+            finally:
+                self._timing(run, "verification", started)
             self._check(run)
         self._emit(
             run,
@@ -387,7 +402,15 @@ class Orchestrator:
                 or generation >= self.config.repair_max
                 or remaining < self.config.repair_min_remaining_ms
             ):
-                reason = "validation_failed_after_repair" if generation else "validation_failed"
+                reason = (
+                    "validation_failed_after_repair"
+                    if generation
+                    else "repair_deadline_insufficient"
+                    if run.validation.repairable
+                    and remaining < self.config.repair_min_remaining_ms
+                    and self.config.repair_max
+                    else "validation_failed"
+                )
                 return self._complete(
                     run,
                     State.ABSTAINED,
@@ -417,9 +440,16 @@ class Orchestrator:
         invalid = False
         try:
             parsed = Question.model_validate(data)
-        except ValidationError:
+            if len(parsed.text) > self.config.max_question_chars:
+                raise ValueError("Question exceeds configured application maximum")
+        except ValueError:
             invalid = True
-            parsed = Question(text="Invalid request", request_id=request_id or uuid4().hex)
+            fallback_id = (
+                request_id if isinstance(request_id, str) and request_id.strip() else uuid4().hex
+            )
+            parsed = Question(
+                text="?", request_id=fallback_id
+            )  # Never retrieved for invalid input.
         budget = parsed.deadline_ms or self.config.deadline_ms
         book = RequestCalls(
             request_id=parsed.request_id,
@@ -472,3 +502,7 @@ class Orchestrator:
             return self._snapshot(run, State.FAILED, "error", reason="event_persistence")
         except (PromptError, EvidenceConflict, RenderError) as exc:
             return self._complete(run, State.FAILED, "error", reason=type(exc).__name__)
+        except Exception as exc:
+            return self._complete(
+                run, State.FAILED, "error", reason="pipeline_" + type(exc).__name__
+            )

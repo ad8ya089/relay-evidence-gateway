@@ -518,3 +518,148 @@ of semantic entailment. First-user-token timing is recorded only on actual
 validated-generator delivery, distinct from internal TTFT and handle completion.
 No P5 control plane, answer cache, /ask API, loadgen or real Groq requests belong
 to this task. All configurable starting thresholds are assumed/chosen, uncalibrated.
+
+## P4 implementation and operating contract
+
+`Orchestrator.handle(question, setting=None, request_id=None, deadline_ms=None)`
+accepts a string or typed Question and returns Outcome. The deadline argument is
+a total budget converted to an absolute injected monotonic deadline on entry.
+Each request owns its state, evidence, call book and stage timings. No planning
+LLM, provider retry, provider queue, limiter, admission controller or HTTP API was
+added. `iter_validated_answer(outcome, clock=..., events=...)` is the separate
+delivery boundary. These interfaces are ready for P5 integration.
+
+The successful state path is ARRIVED -> INTERPRETED -> RETRIEVED -> GATE ->
+DRAFTING -> VALIDATING -> RELEASED. Weak/empty gates can enter BROADEN ->
+RETRIEVED -> GATE at most twice, only with a meaningful new query. Validation
+can enter REPAIRING -> VALIDATING once. Terminal alternatives are REFUSED_LOCAL,
+REFUSED_MODEL, ABSTAINED, TIMED_OUT and FAILED. Invalid transitions raise
+InvalidTransition, including any attempt to resume a terminal state.
+
+Interpretation is local and advisory: paper aliases, explicit paper restrictions,
+multi-paper comparisons, question type and numeric care. Ambiguous hints do not
+become hard filters; unsupported-topic hints do not short-circuit retrieval.
+Broadening uses applicable section terms and a bounded keyword query. Explicit
+user restrictions survive. Numeric searches request P1's adjacent same-section
+context. Evidence is merged by stable chunk ID and conflicting metadata/text is
+rejected. Literal empty retrieval after broadening refuses without model calls;
+weak nonempty evidence still reaches the draft model. Transient tool errors may
+use one free retrieval retry across the entire logical request. Timeout/malformed
+results are explicit failures, never empty success. Timed-out CPU work is not
+immediately duplicated because P1's worker may continue after cancellation.
+
+Prompts retain P3's markers, exact static prefixes and multiline chunk delimiters.
+Question/evidence/repair feedback remain dynamic user content. Verifier input is
+only the indexed claim/quotes JSON list. Repairs reuse the original draft prefix,
+original evidence and specific rejection feedback. Internal default streaming uses
+JSON Object plus complete-response Pydantic parsing; non-stream calls use the
+existing P2 JSON Schema interface. Provider errors are terminal; malformed model
+content can consume the one application repair, never a hidden provider retry.
+
+Validation rechecks schema, supplied chunk membership, exact normalized quote
+substring and 40-word bound. Normalization handles Unicode, whitespace and
+justified line-break hyphenation, without approximate semantic matching. Pinned
+paper/version/title/URL, section and ordered PDF pages are required. Textual
+version claims also need supporting quotes and agreement with pinned metadata.
+Numeric checks preserve values, units, approximation, theoretical/practical
+qualifiers, conditions and comparison boundaries using surrounding source text.
+Uncertain lexical matches fail safely. The verifier must then return every claim
+index exactly once, all supported. Missing/extra/duplicate indices, empty or
+malformed output, unsupported and overstated verdicts cannot authorize release.
+Validation digests bind the exact draft and evidence to final rendering.
+
+Renderer citations are constructed only from trusted hit metadata, including
+arxiv_id/version, complete title, section and PDF page range. Repeated references
+are deduplicated while every claim retains its source associations. Rejected
+drafts and model-written notes never appear in refusal text. Local/model evidence
+refusals are successful logical responses with internal refusal reasons;
+validation abstention has status error as specified in the design. After one
+failed repair the exact canonical validation abstention is returned.
+
+Deadlines are checked before/after retrieval, before each provider operation,
+before repair, before release and before every delivered piece. Calls use the
+smaller of the remaining logical budget and configured call timeout. Cancellation
+closes provider streams, preserves partial timings/status/known usage, and exposes
+the safe partial Outcome through PipelineCancelledError for external cancellation.
+Every attempted provider call shares the request ID and has a unique P2 call ID.
+P2 alone writes ledger rows; P4 reconciles identity, finalization and usage by ID.
+Totals include draft, verifier, repair and failed calls with known usage, with
+cached input separate. Missing usage leaves nullable totals and explicit known
+subtotals; it is never converted to a false exact zero. A ledger mismatch blocks
+release. Provider retries are always zero.
+
+Only an approved terminal Outcome gets a private, nonserialized delivery seal;
+tampering or reconstructing an Outcome does not authorize delivery. No raw
+provider callback is exposed. `first_user_token_at` and `first_token_ms` remain
+unset until the first actual generator yield, after validation and rendering.
+`release_ready` records handle completion; `first_user_token` and then `done` are
+emitted by delivery, matching the architecture's event ordering. Unreleasable
+failures emit done in handle. Outcome.total_ms measures handle processing; the
+delivery done event measures elapsed time through delivery completion. P5 must
+fully consume/close delivery and account for interrupted HTTP clients separately.
+
+## P4 integration observations and verification
+
+One P3 integration defect was demonstrated by a failing regression: selecting the
+first 40 words could combine a numbered section heading and list preamble with a
+clipped sentence. The only P3 source correction is a private quote selector in
+standin/generation.py. It prefers complete, bounded source sentences after those
+preambles, preserves exact substrings, and retains the original bounded fallback
+for long synthetic passages. Public schemas, markers, profiles and wire behavior
+are unchanged; all previous P3 tests remain unchanged and pass.
+
+Executed local-only `make pipeline-smoke`: RELEASED, two provider calls, zero
+repair, complete ledger usage (2,203 input, 280 output, zero cached, 2,483 counted).
+Handle processing was 2,360 ms, internal provider TTFT 641 ms, first delivered
+token 2,360 ms. It quoted the actual encoder-decoder sentence from Transformer
+1706.03762v7, section 3.2.3, PDF page 5, chunk transformer-v7-p5-c20. These are
+single development-simulator observations, not calibrated Groq measurements or
+an answer-quality grade.
+
+Real-corpus retrieval succeeded in A/B/C/D: respectively 6/4/4/4 hits. First-hit
+provenance was pinned Transformer v7, section 3.2.3, page 5 in every setting.
+Observed retrieval times were 109/94/3,468/63 ms; C used the cross-encoder, the
+others did not. Dense preparation was outside the query budget. Initial C cold
+and warmed reranking exceeded the original assumed 1,500 ms tool budget; that
+budget is now explicitly 5,000 ms, still bounded by the 8,000 ms logical deadline.
+A separate warmed real-corpus C pipeline run RELEASED with two calls, complete
+reconciled usage, 2,562 ms retrieval and 4,921 ms handle/first-delivery time. Cold
+model initialization or slower hardware can still timeout safely. No latency
+percentiles or production throughput are established by these diagnostics.
+
+Acceptance evidence is in tests/test_app_* and tests/test_tool_executor.py:
+
+- Integration: actual P2 adapter/P3 service and SQLite equality; real-corpus
+  answer; empty refusal; forged ID/quote/version/missing provenance; one repair
+  with verify_fail_prob=1; pinned Moshi theoretical-versus-practical rejection.
+- Validation/numeric/render: exact quote normalization and bounds, pinned source
+  metadata, numeric units/qualifiers/conditions/comparisons, version claims,
+  compact verifier shape and all index failure modes, deduplicated citations.
+- Deadlines/accounting: every stage boundary, live P3 draft/verifier timeout,
+  partial streaming cancellation, known failed usage, missing usage, server
+  failure, malformed draft/verifier, and ledger mismatch.
+- Delivery/edges: no pre-validation output, modified/unsealed outcome rejection,
+  approved-but-expired delivery, no extra call without repair time, one shared
+  tool retry and terminal unexpected provider failure. Event persistence failure
+  prevents authorizing output; output/logs exclude internal rejected paper text.
+
+Final verification: full pytest and make test each pass 322 tests, comprising all
+212 unchanged P1/P2/P3 regressions and 110 P4 tests. Ruff check passes and format
+check reports 127 files already formatted. Mypy is not configured. One new
+cancellation test initially required positive elapsed time; the full Windows run
+showed immediate cancellation can share a monotonic clock tick. It now requires
+a present nonnegative timing, closed stream and settled ledger; no old test was
+weakened. The complete created/changed inventory is P4_FILES.txt.
+
+No real Groq request, real probe, API-key lookup or Authorization logging was
+performed. Existing P2 real-call guards are unchanged. The original 11 documents
+and both human-owned evaluation files remain byte-identical. Generated smoke
+ledgers/events, PDFs, models and indexes remain ignored/uncommitted. Numeric
+validation is conservative lexical checking plus a required model verifier;
+P3's deterministic verifier does not demonstrate real semantic answer quality.
+Gate thresholds, budgets and fault probabilities remain assumed engineering
+choices. Missing section metadata can cause conservative abstention. The status
+distinction between successful evidence refusal and validation abstention was
+resolved from the existing design, without changing docs. Proposed later doc
+clarifications: make the handle-versus-delivery timing boundary explicit, and
+document cold model startup separately from the per-request deadline.

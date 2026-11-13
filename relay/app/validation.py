@@ -72,6 +72,15 @@ def validate_evidence(
                 reasons.append("quote_too_long")
         if re.search(r"\[[^\]]*(?:§|\bv\d+\b|\bpp?\.\s*\d)", claim.text):
             reasons.append("model_authored_citation")
+        for version in re.findall(r"\bv(\d+)\b", claim.text, re.I):
+            supported = any(
+                e.chunk_id in hits
+                and hits[e.chunk_id].arxiv_version == int(version)
+                and re.search(rf"\bv{version}\b", e.quote, re.I)
+                for e in claim.evidence
+            )
+            if not supported:
+                reasons.append("model_version_unsupported")
         numeric = numeric_errors(claim, hits, config) if not reasons else []
         reasons.extend(numeric)
         outcomes.append(
@@ -94,6 +103,7 @@ def validate_evidence(
                         r in reasons for r in ("quote_not_substring", "quote_too_long")
                     ),
                     "model_citations_absent": "model_authored_citation" not in reasons,
+                    "model_versions_supported": "model_version_unsupported" not in reasons,
                     "numeric": not numeric,
                 },
                 reasons=list(dict.fromkeys(reasons)),

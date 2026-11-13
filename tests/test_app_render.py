@@ -78,3 +78,26 @@ async def test_no_delivery_before_validation_or_after_deadline() -> None:
         _authorize(outcome)
     with pytest.raises(DeliveryError):
         _ = [part async for part in iter_validated_answer(outcome, clock=clock())]
+
+
+async def test_shared_citation_is_deduplicated_without_losing_claim_associations() -> None:
+    draft, hits = await example()
+    draft.claims.append(draft.claims[0].model_copy(deep=True))
+    runner = CallRunner(
+        ScriptedProvider([verdicts("supported", "supported")]),
+        "FAKE",
+        clock=clock(),
+        config=pipeline_settings(),
+    )
+    validated = await verify(
+        draft,
+        validate_evidence(draft, hits),
+        runner,
+        RequestCalls(request_id="r", run_id="unit", arrival_ns=0, deadline_ns=10**12),
+        Prompts(),
+    )
+    rendered = render_answer(draft, hits, validated)
+    identifier = draft.claims[0].evidence[0].chunk_id
+    assert len(rendered.citations) == 1
+    assert rendered.claim_citations == {0: [identifier], 1: [identifier]}
+    assert rendered.text.count(rendered.citations[0].display) == 2

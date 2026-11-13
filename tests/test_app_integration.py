@@ -6,19 +6,31 @@ import pytest
 from relay.app.delivery import iter_validated_answer
 from relay.app.models import Draft, State
 from relay.app.orchestrator import Orchestrator
+from relay.app.prompts import Prompts
 from relay.app.settings import pipeline_settings
 from relay.control.ledger import Ledger
 from relay.obs.events import EventWriter
 from relay.providers.base import LLMRequest, LLMResult
 from relay.providers.groq import GroqCompatibleProvider
-from relay.retrieval.models import RetrievalHit, RetrievalResult
+from relay.retrieval.models import Chunk, RetrievalHit, RetrievalResult
 from relay.retrieval.search import RetrievalEngine
 from relay.tools.executor import ToolExecutor
+from standin.generation import generate
 from standin.service import create_app
 from tests.fixtures.app_integration import integrated
 from tests.fixtures.backends import fake_chunk
 from tests.standin_helpers import profile
 from tests.standin_server import running
+
+
+def test_p3_draft_uses_a_complete_sentence_after_section_and_list_heading() -> None:
+    sentence = "FAKE encoder keys and values come from the encoder output."
+    source = "3.2.3 FAKE section\n\nFAKE attention is used in three ways:\n\n" + sentence
+    chunk = fake_chunk(0, source)
+    hit = RetrievalHit(**chunk.model_dump(), score=1, rank=1)
+    draft = Draft.model_validate_json(generate(Prompts().draft("FAKE encoder question", [hit])))
+    assert draft.claims[0].text == sentence
+    assert draft.claims[0].evidence[0].quote == sentence
 
 
 @pytest.mark.parametrize("reject", [False, True])
@@ -55,6 +67,7 @@ async def test_actual_p2_p3_pipeline_and_ledger_usage(tmp_path: Path, reject: bo
         assert (
             names.index("first_delta") < names.index("validated") < names.index("first_user_token")
         )
+        assert names.index("release_ready") < names.index("first_user_token") < names.index("done")
         assert "FAKE alpha evidence" not in path.read_text()
         if reject:
             assert outcome.tokens_cached > 0  # Repair reuses the exact draft prefix.
@@ -137,3 +150,51 @@ async def test_pipeline_over_ephemeral_local_http(tmp_path: Path, loopback_ports
                 outcome = await pipeline.handle("alpha", setting="A")
     assert outcome.state == State.RELEASED and outcome.provider_ttft_ms is not None
     assert outcome.provider_ttft_ms < outcome.provider_ms and outcome.first_token_ms is None
+
+
+async def test_pinned_moshi_passage_does_not_validate_theoretical_as_practical(
+    tmp_path: Path,
+) -> None:
+    path = Path("data/chunks/A.jsonl")
+    if not path.exists():
+        pytest.skip("Pinned corpus unavailable; tested locally after P1 ingestion")
+    chunks = [
+        Chunk.model_validate_json(line) for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    source = next(
+        c
+        for c in chunks
+        if c.paper_id == "moshi" and c.section and "theoretical latency of 160 ms" in c.text
+    )
+    hit = RetrievalHit(**source.model_dump(), score=1, rank=1)
+    quote = "theoretical latency of 160 ms"
+    assert quote in hit.text and hit.arxiv_id == "2410.00037" and hit.arxiv_version == 1
+
+    async def search(query: str, *args: object, **kwargs: object) -> RetrievalResult:
+        return RetrievalResult(
+            status="ok", hits=[hit], setting="A", query_used=query, method="bm25"
+        )
+
+    config = pipeline_settings().model_copy(update={"repair_max": 0})
+    async with integrated(tmp_path, config=config) as (app, _, _):
+        actual = app.runner.provider
+
+        class MisqualifiedResponse:
+            async def complete(self, request: LLMRequest) -> LLMResult:
+                result = await actual.complete(request)
+                false_claim = Draft(
+                    status="answer",
+                    claims=[
+                        {
+                            "text": "The practical latency is 160 ms.",
+                            "evidence": [{"chunk_id": hit.chunk_id, "quote": quote}],
+                        }
+                    ],
+                )
+                return result.model_copy(update={"text": false_claim.model_dump_json()})
+
+        app.runner.provider = MisqualifiedResponse()
+        app.executor = ToolExecutor(search, clock=app.clock, config=config)
+        outcome = await app.handle("Moshi practical latency", setting="A")
+    assert outcome.state == State.ABSTAINED and outcome.verifier_calls == 0
+    assert outcome.validation.failure_reason == "numeric_value_unit_or_qualifier_unsupported"

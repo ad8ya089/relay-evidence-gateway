@@ -1,6 +1,7 @@
 """Narrow retrieval boundary with one explicit local transient retry."""
 
 import asyncio
+import math
 import random
 import threading
 from typing import Protocol
@@ -103,6 +104,11 @@ class ToolExecutor:
                 raise ValueError("Retrieval provenance mismatch")
             if (result.status == "ok") != bool(result.hits):
                 raise ValueError("Retrieval status/hits mismatch")
+            if any(
+                not math.isfinite(h.score) or h.rank <= 0 or h.page_end < h.page_start
+                for h in result.hits
+            ):
+                raise ValueError("Malformed retrieval scores/ranks/pages")
         except (ValueError, TypeError):
             return self._failure("error", query, setting, "Malformed retrieval result"), False
         return result, result.status == "error"
@@ -118,9 +124,11 @@ class ToolExecutor:
         top_k: int | None = None,
         paper_hint: PaperId | None = None,
         numeric: bool = False,
+        allow_retry: bool = True,
     ) -> RetrievalResult:
         start = self.clock.monotonic_ns()
-        for attempt in range(1, self.config.tool_retry_max + 2):
+        retry_max = self.config.tool_retry_max if allow_retry else 0
+        for attempt in range(1, retry_max + 2):
             remaining = (deadline_ns - self.clock.monotonic_ns()) / 1e6
             if remaining <= 0:
                 return self._failure("timeout", query, setting, "Logical request deadline exceeded")
@@ -159,7 +167,7 @@ class ToolExecutor:
                 took_ms=result.took_ms,
                 rerank_method=result.rerank_method,
             )
-            if not retryable or attempt > self.config.tool_retry_max:
+            if not retryable or attempt > retry_max:
                 return result
             if (
                 deadline_ns - self.clock.monotonic_ns()

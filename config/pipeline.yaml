@@ -18,7 +18,7 @@ verify_timeout_ms: 3000
 draft_stream: true
 verify_stream: true
 reasoning_effort: low
-tool_timeout_ms: 1500
+tool_timeout_ms: 5000  # assumed budget; local C reranking exceeded the initial 1500 ms
 tool_retry_max: 1
 tool_retry_min_remaining_ms: 250
 tool_fault_prob: 0.0

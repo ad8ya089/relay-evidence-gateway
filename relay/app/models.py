@@ -150,6 +150,8 @@ class CallAttempt(StrictModel):
     usage_complete: bool
     total_ms: float = Field(ge=0)
     provider_ttft_ms: float | None = None
+    first_reasoning_delta_ms: float | None = None
+    first_content_delta_ms: float | None = None
     status_code: int | None = None
     failure_kind: str | None = None
     ledger_reconciled: bool = False
@@ -185,6 +187,7 @@ class Outcome(StrictModel):
     verifier_calls: int = 0
     repair_calls: int = 0
     retries: Literal[0] = 0
+    tool_retries: int = Field(default=0, ge=0, le=1)
     usage: TokenTotals = Field(default_factory=TokenTotals)
     calls: list[CallAttempt] = Field(default_factory=list)
     stage_ms: dict[str, float] = Field(default_factory=dict)
